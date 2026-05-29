@@ -19,6 +19,8 @@ export default function App() {
   // Color operations
   const [colorOp, setColorOp] = useState<null | 'apply' | 'clear'>(null);
 
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
   // Terminal open request — sidebar sets this, TerminalPane handles it
   const [pendingOpen, setPendingOpen] = useState<string | null>(null);
   // Track which worktree paths currently have open terminals (for sidebar highlight)
@@ -79,6 +81,7 @@ export default function App() {
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: '#0d0d0d' }}>
       <Sidebar
+        isOpen={sidebarOpen}
         state={state}
         connected={connected}
         focusingId={focusingId}
@@ -90,6 +93,30 @@ export default function App() {
         onApplyColors={applyColors}
         onClearColors={clearColors}
       />
+
+      {/* Sidebar toggle strip — always visible, never clipped */}
+      <div
+        onClick={() => setSidebarOpen(p => !p)}
+        title={sidebarOpen ? 'Collapse sidebar (⌘B)' : 'Expand sidebar (⌘B)'}
+        style={{
+          width:          16,
+          flexShrink:     0,
+          background:     '#0a0a0a',
+          borderRight:    '1px solid #1a1a1a',
+          cursor:         'pointer',
+          display:        'flex',
+          alignItems:     'center',
+          justifyContent: 'center',
+          color:          '#2a2a2a',
+          fontSize:       10,
+          userSelect:     'none',
+          transition:     'color 0.15s',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.color = '#666'; e.currentTarget.style.background = '#111'; }}
+        onMouseLeave={e => { e.currentTarget.style.color = '#2a2a2a'; e.currentTarget.style.background = '#0a0a0a'; }}
+      >
+        {sidebarOpen ? '‹' : '›'}
+      </div>
 
       <TerminalPane
         allWorktrees={allWorktrees}

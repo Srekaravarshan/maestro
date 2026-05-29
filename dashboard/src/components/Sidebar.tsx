@@ -134,22 +134,24 @@ function SidebarRow({
 // ── Sidebar ────────────────────────────────────────────────────────────────
 
 interface Props {
-  state:          DashState | null;
-  connected:      boolean;
-  focusingId:     string | null;
+  state:             DashState | null;
+  connected:         boolean;
+  focusingId:        string | null;
   openTerminalPaths: string[];
-  onFocusStart:   (id: string) => void;
-  onFocusDone:    () => void;
-  onOpenTerminal: (path: string) => void;
-  colorOp:        null | 'apply' | 'clear';
-  onApplyColors:  () => void;
-  onClearColors:  () => void;
+  onFocusStart:      (id: string) => void;
+  onFocusDone:       () => void;
+  onOpenTerminal:    (path: string) => void;
+  colorOp:           null | 'apply' | 'clear';
+  onApplyColors:     () => void;
+  onClearColors:     () => void;
+  isOpen:            boolean;
 }
 
 export default function Sidebar({
   state, connected, focusingId, openTerminalPaths,
   onFocusStart, onFocusDone, onOpenTerminal,
   colorOp, onApplyColors, onClearColors,
+  isOpen,
 }: Props) {
   const allWorktrees  = state?.repos.flatMap(r => r.worktrees) ?? [];
   const needAttention = allWorktrees.filter(w =>
@@ -161,13 +163,13 @@ export default function Sidebar({
 
   return (
     <div style={{
-      width:        300,
+      width:        isOpen ? 300 : 0,
       flexShrink:   0,
       display:      'flex',
       flexDirection:'column',
       background:   '#0a0a0a',
-      borderRight:  '1px solid #1a1a1a',
       overflow:     'hidden',
+      transition:   'width 0.2s ease',
     }}>
       {/* ── Header ──────────────────────────────────────────────────── */}
       <div style={{

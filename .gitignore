@@ -122,6 +122,8 @@ web_modules/
 .cache
 .parcel-cache
 
+dashboard/src-tauri/target/debug/
+
 # Next.js build output
 .next
 out
