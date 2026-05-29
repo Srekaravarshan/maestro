@@ -5,8 +5,6 @@
  */
 import { DashState, WorktreeInfo } from '../types';
 import AttentionQueue from './AttentionQueue';
-import ActivityFeed from './ActivityFeed';
-import { ActivityEntry } from '../types';
 
 // ── Status colors ──────────────────────────────────────────────────────────
 
@@ -29,16 +27,18 @@ function timeAgo(ms: number | null): string {
 
 function SidebarRow({
   wt,
+  shortcutKey,
   isOpen,
   onOpen,
   onFocusVSCode,
   focusingId,
 }: {
-  wt:           WorktreeInfo;
-  isOpen:       boolean;
-  onOpen:       () => void;
+  wt:            WorktreeInfo;
+  shortcutKey:   number | null;
+  isOpen:        boolean;
+  onOpen:        () => void;
   onFocusVSCode: () => void;
-  focusingId:   string | null;
+  focusingId:    string | null;
 }) {
   const agent      = wt.agent;
   const statusColor = agent ? (
@@ -58,8 +58,15 @@ function SidebarRow({
 
   return (
     <div
-      onClick={onOpen}
-      title={`Open terminal in ${wt.id}`}
+      onClick={(e) => {
+        if (e.metaKey) {
+          // Cmd+click → focus VS Code window
+          onFocusVSCode();
+        } else {
+          onOpen();
+        }
+      }}
+      title={`Click to open terminal · Cmd+click to focus VS Code`}
       style={{
         display:      'flex',
         alignItems:   'center',
@@ -74,6 +81,17 @@ function SidebarRow({
       onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = '#0f0f0f'; }}
       onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = 'transparent'; }}
     >
+      {/* Ctrl+N shortcut badge */}
+      {shortcutKey && (
+        <span style={{
+          flexShrink: 0, fontSize: 9, color: '#2a2a2a',
+          background: '#1a1a1a', borderRadius: 3,
+          padding: '1px 4px', fontVariantNumeric: 'tabular-nums',
+        }}>
+          ⌥{shortcutKey}
+        </span>
+      )}
+
       {/* Branch name */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
@@ -113,20 +131,6 @@ function SidebarRow({
         )}
       </div>
 
-      {/* VS Code focus button */}
-      <button
-        onClick={(e) => { e.stopPropagation(); onFocusVSCode(); }}
-        title="Focus VS Code window"
-        disabled={focusingId !== null}
-        style={{
-          background: 'none', border: 'none', cursor: 'pointer',
-          color: '#2a2a2a', fontSize: 11, padding: '0 2px', flexShrink: 0,
-        }}
-        onMouseEnter={e => { e.currentTarget.style.color = '#555'; }}
-        onMouseLeave={e => { e.currentTarget.style.color = '#2a2a2a'; }}
-      >
-        ⎋
-      </button>
     </div>
   );
 }
@@ -163,13 +167,14 @@ export default function Sidebar({
 
   return (
     <div style={{
-      width:        isOpen ? 300 : 0,
-      flexShrink:   0,
-      display:      'flex',
-      flexDirection:'column',
-      background:   '#0a0a0a',
-      overflow:     'hidden',
-      transition:   'width 0.2s ease',
+      width:         isOpen ? 300 : 0,
+      flexShrink:    0,
+      display:       'flex',
+      flexDirection: 'column',
+      background:    '#0a0a0a',
+      borderRight:   isOpen ? '1px solid #1a1a1a' : 'none',
+      overflow:      'hidden',
+      // No animation — instant toggle, no reflow during resize
     }}>
       {/* ── Header ──────────────────────────────────────────────────── */}
       <div style={{
@@ -246,10 +251,14 @@ export default function Sidebar({
             }}>
               {repo.repo.toUpperCase()}
             </div>
-            {repo.worktrees.map(wt => (
+            {repo.worktrees.map(wt => {
+              const flatIdx = allWorktrees.indexOf(wt);
+              const shortcutKey = flatIdx >= 0 && flatIdx < 9 ? flatIdx + 1 : null;
+              return (
               <SidebarRow
                 key={wt.id}
                 wt={wt}
+                shortcutKey={shortcutKey}
                 isOpen={openTerminalPaths.includes(wt.id)}
                 onOpen={() => onOpenTerminal(wt.id)}
                 onFocusVSCode={() => {
@@ -263,13 +272,12 @@ export default function Sidebar({
                 }}
                 focusingId={focusingId}
               />
-            ))}
+              );
+            })}
           </div>
         ))}
       </div>
 
-      {/* ── Activity feed (bottom, fixed height) ─────────────────── */}
-      <ActivityFeed entries={(state?.activity ?? [] as ActivityEntry[]).slice(0, 50)} />
     </div>
   );
 }

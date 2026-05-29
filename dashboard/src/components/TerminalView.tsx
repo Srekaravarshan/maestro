@@ -24,6 +24,8 @@ interface Props {
   branch:          string;
   color:           string;
   style?:          CSSProperties;
+  /** Position index (1-based) for Cmd+N shortcut display */
+  position:        number;
   isActive:        boolean;
   /** When true: canvas is hidden, only the compact header + status shows.
    *  The PTY keeps running — no resize is sent. */
@@ -35,17 +37,26 @@ interface Props {
   onClick:         () => void;
   /** Parent calls this after the expand transition to re-fit the terminal */
   registerRefit:   (fn: () => void) => void;
+  /** Parent calls this to focus the terminal (grab keyboard input) */
+  registerFocus:   (fn: () => void) => void;
 }
 
 export default function TerminalView({
-  worktreePath, branch, color, style, isActive, isMinimized, lastActivity,
-  onTerminalReady, onClose, onClick, registerRefit,
+  worktreePath, branch, color, style, position, isActive, isMinimized, lastActivity,
+  onTerminalReady, onClose, onClick, registerRefit, registerFocus,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef      = useRef<Terminal | null>(null);
   const fitRef       = useRef<FitAddon | null>(null);
   const termIdRef    = useRef<string | null>(null);
   const mountedRef   = useRef(true);
+
+  // Register focus so TerminalPane can steal keyboard focus to this terminal
+  useEffect(() => {
+    registerFocus(() => {
+      termRef.current?.focus();
+    });
+  }, []);
 
   // Register the refit function so TerminalPane can call it after expand transition
   useEffect(() => {
@@ -154,10 +165,41 @@ export default function TerminalView({
     })();
 
     // ── Input ─────────────────────────────────────────────────────
-    term.onData((data) => {
+    const send = (data: string) => {
       if (termIdRef.current) {
         invoke('write_terminal', { terminalId: termIdRef.current, data }).catch(() => {});
       }
+    };
+
+    term.onData((data) => send(data));
+
+    // ── Mac keyboard shortcuts ─────────────────────────────────────
+    // xterm.js doesn't handle these by default in WebView.
+    // Return false = we handle it. Return true = xterm handles it.
+    term.attachCustomKeyEventHandler((e: KeyboardEvent): boolean => {
+      if (e.type !== 'keydown') return true;
+      const { metaKey, altKey, key } = e;
+
+      // Cmd+Backspace → kill to beginning of line (same as Ctrl+U)
+      if (metaKey && key === 'Backspace')   { send('\x15'); return false; }
+      // Opt+Backspace → delete word backward (same as Ctrl+W)
+      if (altKey  && key === 'Backspace')   { send('\x17'); return false; }
+
+      // Cmd+← → beginning of line (Ctrl+A)
+      if (metaKey && key === 'ArrowLeft')   { send('\x01'); return false; }
+      // Cmd+→ → end of line (Ctrl+E)
+      if (metaKey && key === 'ArrowRight')  { send('\x05'); return false; }
+
+      // Opt+← → word backward (ESC + b)
+      if (altKey  && key === 'ArrowLeft')   { send('\x1bb'); return false; }
+      // Opt+→ → word forward (ESC + f)
+      if (altKey  && key === 'ArrowRight')  { send('\x1bf'); return false; }
+
+      // Cmd+K → clear screen (Ctrl+L)
+      if (metaKey && key === 'k')           { send('\x0c'); return false; }
+
+      // Let xterm handle everything else (including Cmd+C copy, Cmd+V paste, etc.)
+      return true;
     });
 
     // ── Resize ────────────────────────────────────────────────────
@@ -211,11 +253,21 @@ export default function TerminalView({
         background: '#111', borderBottom: '1px solid #1e1e1e',
       }}>
         <div style={{ width: 3, background: color, alignSelf: 'stretch', flexShrink: 0 }} />
+        {/* Cmd+N badge */}
+        {position <= 9 && (
+          <span style={{
+            flexShrink: 0, fontSize: 9, color: '#2a2a2a',
+            background: '#1a1a1a', borderRadius: 3,
+            padding: '1px 4px', marginLeft: 6,
+          }}>
+            ⌘{position}
+          </span>
+        )}
         <span style={{
           flex: 1, fontSize: 12,
           color: isMinimized ? color : '#888',
           fontWeight: isMinimized ? 600 : 400,
-          marginLeft: 8,
+          marginLeft: 6,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {branch}

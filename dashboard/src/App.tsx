@@ -20,6 +20,32 @@ export default function App() {
   const [colorOp, setColorOp] = useState<null | 'apply' | 'clear'>(null);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const toggleSidebar = () => setSidebarOpen(p => !p);
+
+  // Cmd+B — global sidebar toggle
+  // Ctrl+1-9 — open/activate the Nth worktree from the sidebar
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.metaKey && e.key === 'b') {
+        e.preventDefault();
+        toggleSidebar();
+        return;
+      }
+      // Option+1-9 → open/focus Nth worktree from sidebar list
+      // Use e.code (physical key) because Option+digit produces special chars on macOS
+      if (e.altKey && !e.metaKey) {
+        const match = e.code.match(/^Digit([1-9])$/);
+        if (match) {
+          const n = parseInt(match[1], 10);
+          const allWorktrees = state?.repos.flatMap(r => r.worktrees) ?? [];
+          const wt = allWorktrees[n - 1];
+          if (wt) { e.preventDefault(); handleOpenTerminal(wt.id); }
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [state]);
 
   // Terminal open request — sidebar sets this, TerminalPane handles it
   const [pendingOpen, setPendingOpen] = useState<string | null>(null);
@@ -94,36 +120,14 @@ export default function App() {
         onClearColors={clearColors}
       />
 
-      {/* Sidebar toggle strip — always visible, never clipped */}
-      <div
-        onClick={() => setSidebarOpen(p => !p)}
-        title={sidebarOpen ? 'Collapse sidebar (⌘B)' : 'Expand sidebar (⌘B)'}
-        style={{
-          width:          16,
-          flexShrink:     0,
-          background:     '#0a0a0a',
-          borderRight:    '1px solid #1a1a1a',
-          cursor:         'pointer',
-          display:        'flex',
-          alignItems:     'center',
-          justifyContent: 'center',
-          color:          '#2a2a2a',
-          fontSize:       10,
-          userSelect:     'none',
-          transition:     'color 0.15s',
-        }}
-        onMouseEnter={e => { e.currentTarget.style.color = '#666'; e.currentTarget.style.background = '#111'; }}
-        onMouseLeave={e => { e.currentTarget.style.color = '#2a2a2a'; e.currentTarget.style.background = '#0a0a0a'; }}
-      >
-        {sidebarOpen ? '‹' : '›'}
-      </div>
-
       <TerminalPane
         allWorktrees={allWorktrees}
         pendingOpen={pendingOpen}
         onPendingHandled={() => setPendingOpen(null)}
         restoreTerminals={restoreTerminals}
         onTerminalClosed={handleTerminalClosed}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={toggleSidebar}
       />
     </div>
   );

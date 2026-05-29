@@ -8,6 +8,8 @@ interface Props {
   onPendingHandled: () => void;
   restoreTerminals: string[];
   onTerminalClosed: (path: string) => void;
+  sidebarOpen:      boolean;
+  onToggleSidebar:  () => void;
 }
 
 type ViewMode = 'split' | 'tabs';
@@ -28,38 +30,78 @@ function worktreeInfo(path: string, all: WorktreeInfo[]) {
 
 export default function TerminalPane({
   allWorktrees, pendingOpen, onPendingHandled, restoreTerminals, onTerminalClosed,
+  sidebarOpen, onToggleSidebar,
 }: Props) {
   const [terminals, setTerminals]   = useState<OpenTerminal[]>([]);
   const [viewMode, setViewMode]     = useState<ViewMode>('split');
   const [activeSlot, setActiveSlot] = useState<string | null>(null);
-  /** The slot that is currently expanded (clicked to fill most space) */
   const [expandedSlot, setExpandedSlot] = useState<string | null>(null);
-  /** Whether click-to-expand is enabled. Only available when 3+ terminals. */
-  const [expandEnabled, setExpandEnabled] = useState(true);
+  // Default OFF — user opts in via Cmd+E or the button
+  const [expandEnabled, setExpandEnabled] = useState(false);
   const [restored, setRestored]     = useState(false);
-  const refitRef = useRef<Record<string, () => void>>({});
+  const refitRef  = useRef<Record<string, () => void>>({});
+  const focusRef  = useRef<Record<string, () => void>>({});
+
+  // ── Keyboard shortcuts ───────────────────────────────────────────────────
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!e.metaKey) return;
+
+      // Cmd+E — toggle expand mode (only meaningful with 3+ terminals)
+      if (e.key === 'e') {
+        e.preventDefault();
+        setExpandEnabled(p => !p);
+        setExpandedSlot(null);
+        return;
+      }
+
+      // Cmd+1-9 — switch to the Nth open terminal by position
+      if (!e.ctrlKey) {
+        const n = parseInt(e.key, 10);
+        if (n >= 1 && n <= 9) {
+          const slot = terminals[n - 1];
+          if (slot) { e.preventDefault(); activateSlot(slot.slotId); }
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [allWorktrees, terminals]);
 
   // Restore terminals from last session once
   useEffect(() => {
     if (restored || restoreTerminals.length === 0) return;
     setRestored(true);
-    restoreTerminals.forEach(path => openTerminal(path));
+    restoreTerminals.forEach(path => openTerminalByPath(path));
   }, [restoreTerminals]);
 
   useEffect(() => {
     if (!pendingOpen) return;
-    openTerminal(pendingOpen);
+    openTerminalByPath(pendingOpen);
     onPendingHandled();
   }, [pendingOpen]);
 
-  function openTerminal(worktree_path: string) {
+  function activateSlot(slotId: string) {
+    setActiveSlot(slotId);
+
+    // Expand if mode is on — same behaviour whether triggered by direct click,
+    // sidebar click, or Cmd+N
+    if (expandEnabled && viewMode === 'split') {
+      setExpandedSlot(slotId);
+      setTimeout(() => refitRef.current[slotId]?.(), 220);
+    }
+
+    // Steal keyboard focus after a short paint delay
+    setTimeout(() => focusRef.current[slotId]?.(), 50);
+  }
+
+  function openTerminalByPath(worktree_path: string) {
     const existing = terminals.find(t => t.worktree_path === worktree_path);
     if (existing) {
-      setActiveSlot(existing.slotId);
-      setExpandedSlot(existing.slotId);
+      activateSlot(existing.slotId);
       return;
     }
-    const info  = worktreeInfo(worktree_path, allWorktrees);
+    const info = worktreeInfo(worktree_path, allWorktrees);
     const slot: OpenTerminal = {
       slotId: newSlotId(), worktree_path,
       terminal_id: null,
@@ -67,7 +109,7 @@ export default function TerminalPane({
     };
     setTerminals(prev => [...prev, slot]);
     setActiveSlot(slot.slotId);
-    // Don't auto-expand on open — let the user click to expand
+    // Expand + focus fires in handleTerminalReady once the PTY is ready
   }
 
   function closeTerminal(slotId: string) {
@@ -85,20 +127,22 @@ export default function TerminalPane({
     setTerminals(prev => prev.map(t =>
       t.slotId === slotId ? { ...t, terminal_id } : t
     ));
+    // New terminal just became ready — activate it (expand + focus)
+    activateSlot(slotId);
   }
 
   // Expand is only meaningful when 3+ terminals and enabled
   const canExpand = terminals.length > 2 && expandEnabled && viewMode === 'split';
 
   function handleTerminalClick(slotId: string) {
-    setActiveSlot(slotId);
-    if (!canExpand) return;
-
-    if (expandedSlot === slotId) {
+    if (canExpand && expandedSlot === slotId) {
+      // Click the already-expanded terminal → collapse back to equal
       setExpandedSlot(null);
+      setActiveSlot(slotId);
+      setTimeout(() => focusRef.current[slotId]?.(), 50);
     } else {
-      setExpandedSlot(slotId);
-      setTimeout(() => refitRef.current[slotId]?.(), 220);
+      // Same path as sidebar + Cmd+N: expand + focus
+      activateSlot(slotId);
     }
   }
 
@@ -129,6 +173,21 @@ export default function TerminalPane({
         display: 'flex', alignItems: 'center', height: 34, flexShrink: 0,
         borderBottom: '1px solid #1e1e1e', background: '#0f0f0f', gap: 4, paddingRight: 8,
       }}>
+        {/* Sidebar toggle — top left like Warp. Cmd+B also works. */}
+        <button
+          onClick={onToggleSidebar}
+          title={`${sidebarOpen ? 'Hide' : 'Show'} sidebar (⌘B)`}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            color: sidebarOpen ? '#555' : '#333',
+            fontSize: 14, padding: '0 10px', height: 34,
+            display: 'flex', alignItems: 'center', flexShrink: 0,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = '#aaa'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = sidebarOpen ? '#555' : '#333'; }}
+        >
+          ☰
+        </button>
         {/* Tabs mode tab bar */}
         {viewMode === 'tabs' && (
           <div style={{ display: 'flex', flex: 1, overflow: 'hidden', gap: 2, paddingLeft: 4 }}>
@@ -206,7 +265,7 @@ export default function TerminalPane({
           flex: 1, display: 'flex', flexDirection: 'row',
           gap: 4, padding: 4, overflow: 'hidden',
         }}>
-          {terminals.map(t => {
+          {terminals.map((t, i) => {
             const isExpanded  = canExpand && expandedSlot === t.slotId;
             const isMinimized = canExpand && expandedSlot !== null && expandedSlot !== t.slotId;
             const info        = worktreeInfo(t.worktree_path, allWorktrees);
@@ -226,6 +285,7 @@ export default function TerminalPane({
                   worktreePath={t.worktree_path}
                   branch={t.branch}
                   color={t.color}
+                  position={i + 1}
                   isActive={t.slotId === activeSlot}
                   isMinimized={isMinimized}
                   lastActivity={info.lastActivity}
@@ -233,6 +293,7 @@ export default function TerminalPane({
                   onClose={() => closeTerminal(t.slotId)}
                   onClick={() => handleTerminalClick(t.slotId)}
                   registerRefit={(fn) => { refitRef.current[t.slotId] = fn; }}
+                  registerFocus={(fn) => { focusRef.current[t.slotId] = fn; }}
                 />
               </div>
             );
@@ -246,11 +307,13 @@ export default function TerminalPane({
                 worktreePath={t.worktree_path}
                 branch={t.branch}
                 color={t.color}
+                position={terminals.indexOf(t) + 1}
                 isActive isMinimized={false} lastActivity=""
                 onTerminalReady={(tid) => handleTerminalReady(t.slotId, tid)}
                 onClose={() => closeTerminal(t.slotId)}
-                onClick={() => {}}
+                onClick={() => activateSlot(t.slotId)}
                 registerRefit={(fn) => { refitRef.current[t.slotId] = fn; }}
+                registerFocus={(fn) => { focusRef.current[t.slotId] = fn; }}
               />
             </div>
           ))}
