@@ -35,6 +35,8 @@ interface Props {
   onTerminalReady: (terminal_id: string) => void;
   onClose:         () => void;
   onClick:         () => void;
+  /** Status-based glow color — null means no glow. Cleared when terminal is focused. */
+  glowColor:       string | null;
   /** Parent calls this after the expand transition to re-fit the terminal */
   registerRefit:   (fn: () => void) => void;
   /** Parent calls this to focus the terminal (grab keyboard input) */
@@ -43,7 +45,7 @@ interface Props {
 
 export default function TerminalView({
   worktreePath, branch, color, style, position, isActive, isMinimized, lastActivity,
-  onTerminalReady, onClose, onClick, registerRefit, registerFocus,
+  glowColor, onTerminalReady, onClose, onClick, registerRefit, registerFocus,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef      = useRef<Terminal | null>(null);
@@ -235,17 +237,34 @@ export default function TerminalView({
     };
   }, []);
 
+  const borderColor = glowColor
+    ? glowColor
+    : isActive ? `${color}55` : '#1e1e1e';
+
   return (
     <div
       onClick={onClick}
+      className={glowColor ? `glow-${glowColor.slice(1)}` : undefined}
       style={{
         display: 'flex', flexDirection: 'column',
         height: '100%', overflow: 'hidden',
-        border: `1px solid ${isActive ? `${color}55` : '#1e1e1e'}`,
+        border: `1px solid ${borderColor}`,
         borderRadius: 4, cursor: isMinimized ? 'pointer' : 'default',
         ...style,
-      }}
+      } as React.CSSProperties}
     >
+      {/* Inject glow keyframes with the actual color values baked in */}
+      {glowColor && (
+        <style>{`
+          @keyframes terminal-glow-${glowColor.slice(1)} {
+            0%, 100% { box-shadow: 0 0 5px 1px ${glowColor}55; }
+            50%       { box-shadow: 0 0 18px 5px ${glowColor}99; }
+          }
+          .glow-${glowColor.slice(1)} {
+            animation: terminal-glow-${glowColor.slice(1)} 1.8s ease-in-out infinite;
+          }
+        `}</style>
+      )}
       {/* Header — always visible */}
       <div style={{
         display: 'flex', alignItems: 'center',

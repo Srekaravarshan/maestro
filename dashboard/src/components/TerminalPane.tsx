@@ -41,11 +41,62 @@ export default function TerminalPane({
   const [restored, setRestored]     = useState(false);
   const refitRef  = useRef<Record<string, () => void>>({});
   const focusRef  = useRef<Record<string, () => void>>({});
+  // slotId → glow color (status-based) — set when attention is needed, cleared on focus
+  const [glowingSlots, setGlowingSlots] = useState<Record<string, string>>({});
+  const prevStatusRef = useRef<Record<string, string>>({});
+
+  // ── Detect attention-needed status changes → glow ───────────────────────
+  useEffect(() => {
+    for (const wt of allWorktrees) {
+      const agentStatus = wt.agent?.status;
+      const hookState   = wt.claude;
+      // Combine into a single status string for change detection
+      const current = agentStatus ?? hookState ?? 'unknown';
+      const prev    = prevStatusRef.current[wt.id];
+
+      if (prev !== undefined && prev !== current) {
+        const slot = terminals.find(t => t.worktree_path === wt.id);
+        if (slot) {
+          const glowColor =
+            agentStatus === 'done'    ? '#3b82f6' :
+            agentStatus === 'blocked' ? '#f59e0b' :
+            agentStatus === 'error'   ? '#ef4444' :
+            hookState   === 'waiting' ? '#f59e0b' : null;
+
+          if (glowColor) {
+            setGlowingSlots(prev => ({ ...prev, [slot.slotId]: glowColor }));
+          }
+        }
+      }
+      prevStatusRef.current[wt.id] = current;
+    }
+  }, [allWorktrees, terminals]);
 
   // ── Keyboard shortcuts ───────────────────────────────────────────────────
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!e.metaKey) return;
+
+      // Cmd+Shift+K — clear all glows (acknowledge all)
+      if (e.shiftKey && e.key === 'K') {
+        e.preventDefault();
+        setGlowingSlots({});
+        return;
+      }
+
+      // Cmd+O — focus VS Code window for the active terminal's worktree
+      if (e.key === 'o') {
+        e.preventDefault();
+        const activeWorktreePath = terminals.find(t => t.slotId === activeSlot)?.worktree_path;
+        if (activeWorktreePath) {
+          fetch('/api/focus', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: activeWorktreePath }),
+          });
+        }
+        return;
+      }
 
       // Cmd+E — toggle expand mode (only meaningful with 3+ terminals)
       if (e.key === 'e') {
@@ -83,6 +134,12 @@ export default function TerminalPane({
 
   function activateSlot(slotId: string) {
     setActiveSlot(slotId);
+    // Focusing = acknowledged — clear glow for this terminal
+    setGlowingSlots(prev => {
+      const next = { ...prev };
+      delete next[slotId];
+      return next;
+    });
 
     // Expand if mode is on — same behaviour whether triggered by direct click,
     // sidebar click, or Cmd+N
@@ -288,6 +345,7 @@ export default function TerminalPane({
                   position={i + 1}
                   isActive={t.slotId === activeSlot}
                   isMinimized={isMinimized}
+                  glowColor={glowingSlots[t.slotId] ?? null}
                   lastActivity={info.lastActivity}
                   onTerminalReady={(tid) => handleTerminalReady(t.slotId, tid)}
                   onClose={() => closeTerminal(t.slotId)}
@@ -309,6 +367,7 @@ export default function TerminalPane({
                 color={t.color}
                 position={terminals.indexOf(t) + 1}
                 isActive isMinimized={false} lastActivity=""
+                glowColor={glowingSlots[t.slotId] ?? null}
                 onTerminalReady={(tid) => handleTerminalReady(t.slotId, tid)}
                 onClose={() => closeTerminal(t.slotId)}
                 onClick={() => activateSlot(t.slotId)}

@@ -155,8 +155,54 @@ export function focusInVSCode(worktreePath: string): void {
 }
 
 /**
- * Opens a URL in the default browser — fire-and-forget.
+ * Opens a URL in the browser, trying to focus an existing tab rather than
+ * opening a new one.
+ *
+ * Strategy:
+ *   1. Try AppleScript tab-focus for Chrome (full tab enumeration)
+ *   2. For Firefox / other browsers: activate the app then open the URL
+ *      (macOS `open` will reuse an existing tab when the browser is already
+ *      showing that URL — reliable for Firefox with "switch to existing tab" pref)
+ *
+ * All fire-and-forget — caller never blocks.
  */
 export function openInBrowser(url: string): void {
-  exec(`open "${url}"`, { timeout: 5_000 }, () => {});
+  const safeUrl = url.replace(/"/g, '\\"');
+
+  // Chrome: enumerate tabs and focus matching one, or open new
+  const chromeScript = `
+    tell application "Google Chrome"
+      set found to false
+      repeat with w in windows
+        repeat with t in tabs of w
+          if URL of t starts with "${safeUrl}" then
+            set active tab of w to t
+            set index of w to 1
+            set found to true
+            exit repeat
+          end if
+        end repeat
+        if found then exit repeat
+      end repeat
+      if not found then open location "${safeUrl}"
+      activate
+    end tell
+  `.trim();
+
+  // Detect which browser is the default and act accordingly
+  exec(
+    `/usr/bin/osascript -e 'path to frontmost application as text'`,
+    { timeout: 2_000 },
+    (_err, stdout) => {
+      const front = (stdout ?? '').toLowerCase();
+
+      if (front.includes('google chrome') || front.includes('chrome')) {
+        exec(`/usr/bin/osascript << 'EOF'\n${chromeScript}\nEOF`, { timeout: 8_000 }, () => {});
+      } else {
+        // Firefox, Safari, Arc, etc. — activate app then open URL.
+        // macOS reuses an existing tab when the browser already has it open.
+        exec(`/usr/bin/open "${safeUrl}"`, { timeout: 5_000 }, () => {});
+      }
+    }
+  );
 }

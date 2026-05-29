@@ -4,7 +4,6 @@
  * Clicking a worktree row opens a terminal for it (instead of focusing VS Code).
  */
 import { DashState, WorktreeInfo } from '../types';
-import AttentionQueue from './AttentionQueue';
 
 // ── Status colors ──────────────────────────────────────────────────────────
 
@@ -157,11 +156,7 @@ export default function Sidebar({
   colorOp, onApplyColors, onClearColors,
   isOpen,
 }: Props) {
-  const allWorktrees  = state?.repos.flatMap(r => r.worktrees) ?? [];
-  const needAttention = allWorktrees.filter(w =>
-    w.agent?.status === 'done' || w.agent?.status === 'blocked' ||
-    w.agent?.status === 'error' || w.claude === 'waiting'
-  );
+  const allWorktrees = state?.repos.flatMap(r => r.worktrees) ?? [];
   const working = allWorktrees.filter(w => w.claude === 'working' || w.agent?.status === 'running').length;
   const waiting = allWorktrees.filter(w => w.claude === 'waiting' || w.agent?.status === 'blocked').length;
 
@@ -229,18 +224,6 @@ export default function Sidebar({
 
       {/* ── Scrollable content ──────────────────────────────────────── */}
       <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-
-        {/* Attention queue */}
-        {needAttention.length > 0 && (
-          <div style={{ padding: '8px 0 4px' }}>
-            <AttentionQueue
-              worktrees={needAttention}
-              focusingId={focusingId}
-              onFocusStart={onFocusStart}
-              onFocusDone={onFocusDone}
-            />
-          </div>
-        )}
 
         {/* Worktree list */}
         {state?.repos.map(repo => (
