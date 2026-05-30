@@ -63,7 +63,7 @@ class PTYManager {
     cleanEnv['HOME']      ??= os.homedir();
     cleanEnv['USER']      ??= os.userInfo().username;
     cleanEnv['SHELL']     ??= shell;
-    cleanEnv['TERM_PROGRAM'] = 'worktree-dash';
+    cleanEnv['TERM_PROGRAM'] = 'maestro';
 
     process.stderr.write(`[pty] spawning ${shell} in ${worktree_path} (${cols}x${rows})\n`);
 

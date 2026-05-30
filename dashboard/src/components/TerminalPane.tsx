@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, CSSProperties } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { OpenTerminal, WorktreeInfo } from '../types';
 import TerminalView from './TerminalView';
 
@@ -84,15 +85,19 @@ export default function TerminalPane({
         return;
       }
 
-      // Cmd+O — focus VS Code window for the active terminal's worktree
+      // Cmd+O — focus VS Code for the active terminal's worktree
+      // Uses Tauri invoke directly (no HTTP roundtrip — ~30-50ms faster)
       if (e.key === 'o') {
         e.preventDefault();
         const activeWorktreePath = terminals.find(t => t.slotId === activeSlot)?.worktree_path;
         if (activeWorktreePath) {
-          fetch('/api/focus', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: activeWorktreePath }),
+          invoke('focus_vscode', { worktreePath: activeWorktreePath }).catch(() => {
+            // Fallback to HTTP if Tauri command unavailable
+            fetch('/api/focus', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: activeWorktreePath }),
+            });
           });
         }
         return;
@@ -134,22 +139,27 @@ export default function TerminalPane({
 
   function activateSlot(slotId: string) {
     setActiveSlot(slotId);
-    // Focusing = acknowledged — clear glow for this terminal
+
+    // Clear glow — terminal is acknowledged
     setGlowingSlots(prev => {
       const next = { ...prev };
       delete next[slotId];
       return next;
     });
 
-    // Expand if mode is on — same behaviour whether triggered by direct click,
-    // sidebar click, or Cmd+N
+    // Expand if mode is on
     if (expandEnabled && viewMode === 'split') {
       setExpandedSlot(slotId);
       setTimeout(() => refitRef.current[slotId]?.(), 220);
     }
 
-    // Steal keyboard focus after a short paint delay
-    setTimeout(() => focusRef.current[slotId]?.(), 50);
+    // Focus after React paints — requestAnimationFrame is more reliable than
+    // a fixed timeout because it fires after the DOM is updated.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        focusRef.current[slotId]?.();
+      });
+    });
   }
 
   function openTerminalByPath(worktree_path: string) {
@@ -350,6 +360,13 @@ export default function TerminalPane({
                   onTerminalReady={(tid) => handleTerminalReady(t.slotId, tid)}
                   onClose={() => closeTerminal(t.slotId)}
                   onClick={() => handleTerminalClick(t.slotId)}
+                  onBecameActive={() => setActiveSlot(t.slotId)}
+                  onGlobalShortcut={(type, n) => {
+                    if (type === 'ctrl-digit') {
+                      const wt = allWorktrees[n - 1];
+                      if (wt) openTerminalByPath(wt.id);
+                    }
+                  }}
                   registerRefit={(fn) => { refitRef.current[t.slotId] = fn; }}
                   registerFocus={(fn) => { focusRef.current[t.slotId] = fn; }}
                 />
@@ -371,6 +388,13 @@ export default function TerminalPane({
                 onTerminalReady={(tid) => handleTerminalReady(t.slotId, tid)}
                 onClose={() => closeTerminal(t.slotId)}
                 onClick={() => activateSlot(t.slotId)}
+                onBecameActive={() => setActiveSlot(t.slotId)}
+                onGlobalShortcut={(type, n) => {
+                  if (type === 'ctrl-digit') {
+                    const wt = allWorktrees[n - 1];
+                    if (wt) openTerminalByPath(wt.id);
+                  }
+                }}
                 registerRefit={(fn) => { refitRef.current[t.slotId] = fn; }}
                 registerFocus={(fn) => { focusRef.current[t.slotId] = fn; }}
               />

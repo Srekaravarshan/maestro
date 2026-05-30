@@ -94,11 +94,22 @@ impl PtyManager {
             .take_writer()
             .map_err(|e| format!("Failed to take PTY writer: {e}"))?;
 
-        // Reader thread: stream PTY output → Tauri events
+        // Reader thread: stream PTY output → Tauri events.
+        //
+        // IMPORTANT: PTY bytes arrive in arbitrary chunks. Multi-byte UTF-8
+        // sequences (like box-drawing chars: ─ = 0xE2 0x94 0x80) can be split
+        // across reads. `from_utf8_lossy` on a partial sequence emits U+FFFD,
+        // causing the "─???─" corruption the user sees.
+        //
+        // Fix: keep a carry buffer. Each iteration appends new bytes, then
+        // emits only the valid UTF-8 prefix, leaving any trailing incomplete
+        // sequence in the carry buffer for the next read.
         let tid = terminal_id.clone();
         let app_handle = app.clone();
         thread::spawn(move || {
-            let mut buf = [0u8; 4096];
+            let mut buf    = [0u8; 4096];
+            let mut carry: Vec<u8> = Vec::with_capacity(8);
+
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => {
@@ -109,12 +120,27 @@ impl PtyManager {
                         break;
                     }
                     Ok(n) => {
-                        // Convert raw bytes to a lossy UTF-8 string
-                        let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                        let _ = app_handle.emit("terminal-output", TerminalOutput {
-                            terminal_id: tid.clone(),
-                            data,
-                        });
+                        carry.extend_from_slice(&buf[..n]);
+
+                        // Find the largest valid UTF-8 prefix
+                        let valid_end = match std::str::from_utf8(&carry) {
+                            Ok(_)  => carry.len(),
+                            Err(e) => e.valid_up_to(),
+                        };
+
+                        if valid_end > 0 {
+                            // SAFETY: valid_end is guaranteed to be a valid UTF-8 boundary
+                            let data = unsafe {
+                                String::from_utf8_unchecked(carry[..valid_end].to_vec())
+                            };
+                            let _ = app_handle.emit("terminal-output", TerminalOutput {
+                                terminal_id: tid.clone(),
+                                data,
+                            });
+                            carry.drain(..valid_end);
+                        }
+                        // Any leftover bytes in carry are an incomplete sequence —
+                        // they'll be completed on the next read.
                     }
                 }
             }

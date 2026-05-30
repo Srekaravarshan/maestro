@@ -80,18 +80,19 @@ function SidebarRow({
       onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = '#0f0f0f'; }}
       onMouseLeave={e => { if (!isOpen) e.currentTarget.style.background = 'transparent'; }}
     >
-      {/* Ctrl+N shortcut badge */}
+      {/* Option+N badge — number only, visible */}
       {shortcutKey && (
         <span style={{
-          flexShrink: 0, fontSize: 9, color: '#2a2a2a',
-          background: '#1a1a1a', borderRadius: 3,
-          padding: '1px 4px', fontVariantNumeric: 'tabular-nums',
+          flexShrink: 0, fontSize: 10, color: '#666',
+          background: '#222', borderRadius: 3,
+          padding: '1px 5px', fontVariantNumeric: 'tabular-nums',
+          fontWeight: 600,
         }}>
-          ⌥{shortcutKey}
+          ^{shortcutKey}
         </span>
       )}
 
-      {/* Branch name */}
+      {/* Branch + folder name */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
           fontSize: 12, fontWeight: isOpen ? 600 : 400,
@@ -100,6 +101,12 @@ function SidebarRow({
         }}>
           {wt.branch}
         </div>
+        {/* Folder name (when different from branch) */}
+        {(() => { const parts = wt.id.split('/'); const folder = parts[parts.length - 1]; return folder !== wt.branch ? (
+          <div style={{ fontSize: 10, color: '#444', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }}>
+            {folder}
+          </div>
+        ) : null; })()}
         {agent && agent.current_activity && agent.current_activity !== 'Starting...' && (
           <div style={{
             fontSize: 10, color: '#3a3a3a',
@@ -179,7 +186,7 @@ export default function Sidebar({
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
           <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, color: '#fff' }}>
-            WORKTREE DASH
+            MAESTRO
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{

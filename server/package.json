@@ -1,7 +1,7 @@
 {
-  "name": "worktree-dash-server",
+  "name": "maestro-server",
   "version": "0.1.0",
-  "description": "MCP server + discovery engine for the Worktree Dashboard",
+  "description": "Maestro — MCP server + discovery engine",
   "type": "module",
   "scripts": {
     "build": "tsc",

@@ -1,13 +1,13 @@
 [package]
-name = "worktree-dash"
+name = "maestro"
 version = "0.1.0"
-description = "Worktree Dashboard — native terminal multiplexer + Claude session monitor"
+description = "Maestro — native terminal multiplexer + AI agent orchestration for developers"
 authors = ["Srekaravarshan NK"]
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "worktree_dash_lib"
+name = "maestro_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

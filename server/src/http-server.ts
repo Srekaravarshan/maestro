@@ -16,7 +16,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Response } from 'express';
 import { loadRepos } from './registry.js';
 import { listWorktrees, type ListWorktreesResult } from './discover.js';
-import { focusInVSCode, openInBrowser } from './shells.js';
+import { focusInVSCode, openInBrowser, switchToSpace } from './shells.js';
 import { setWorktreeColors, clearWorktreeColors } from './vscode.js';
 import { agentStore } from './agent-store.js';
 import { ptyManager } from './pty-manager.js';
@@ -151,7 +151,7 @@ function poll(): void {
       broadcast('state', payload);
     }
   } catch (err) {
-    process.stderr.write(`[worktree-dash] poll error: ${String(err)}\n`);
+    process.stderr.write(`[maestro] poll error: ${String(err)}\n`);
   }
 }
 
@@ -389,11 +389,11 @@ agentStore.load();
 const previousTerminals = loadOpenTerminals();
 
 httpServer.listen(HTTP_PORT, () => {
-  console.log(`[worktree-dash] Dashboard  →  http://localhost:${HTTP_PORT}`);
-  console.log(`[worktree-dash] WebSocket  →  ws://localhost:${HTTP_PORT}/terminal`);
+  console.log(`[maestro] Dashboard  →  http://localhost:${HTTP_PORT}`);
+  console.log(`[maestro] WebSocket  →  ws://localhost:${HTTP_PORT}/terminal`);
 
   if (previousTerminals.length > 0) {
-    console.log(`[worktree-dash] Restoring ${previousTerminals.length} terminal(s) from last session`);
+    console.log(`[maestro] Restoring ${previousTerminals.length} terminal(s) from last session`);
   }
 
   // Heartbeat

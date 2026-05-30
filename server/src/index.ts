@@ -26,13 +26,13 @@ async function agentPost(endpoint: string, body: Record<string, string>): Promis
     });
     return await res.json();
   } catch {
-    return { ok: false, error: `Could not reach worktree-dash server at ${SERVER_BASE}. Is it running? (cd server && npm start)` };
+    return { ok: false, error: `Could not reach maestro server at ${SERVER_BASE}. Is it running? (cd server && npm start)` };
   }
 }
 
 process.stdin.resume();
-process.on('uncaughtException',   err    => process.stderr.write(`[worktree-dash] uncaughtException: ${err.message}\n`));
-process.on('unhandledRejection',  reason => process.stderr.write(`[worktree-dash] unhandledRejection: ${String(reason)}\n`));
+process.on('uncaughtException',   err    => process.stderr.write(`[maestro] uncaughtException: ${err.message}\n`));
+process.on('unhandledRejection',  reason => process.stderr.write(`[maestro] unhandledRejection: ${String(reason)}\n`));
 
 // ── CLI shortcut modes ─────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ if (args[0] === '--set-colors-all') {
 // ── MCP Server ─────────────────────────────────────────────────────────────
 
 const mcp = new McpServer({
-  name:    'worktree-dash',
+  name:    'maestro',
   version: '0.1.0',
 });
 
@@ -332,4 +332,4 @@ mcp.tool(
 
 const transport = new StdioServerTransport();
 await mcp.connect(transport);
-process.stderr.write('[worktree-dash] MCP server ready on stdio\n');
+process.stderr.write('[maestro] MCP server ready on stdio\n');

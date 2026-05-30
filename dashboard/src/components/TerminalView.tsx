@@ -41,17 +41,30 @@ interface Props {
   registerRefit:   (fn: () => void) => void;
   /** Parent calls this to focus the terminal (grab keyboard input) */
   registerFocus:   (fn: () => void) => void;
+  /** Called when the terminal canvas itself receives focus (user clicked it directly) */
+  onBecameActive:  () => void;
+  /** Called when xterm captures a global shortcut that should route outside the terminal */
+  onGlobalShortcut: (type: 'ctrl-digit', n: number) => void;
 }
 
 export default function TerminalView({
   worktreePath, branch, color, style, position, isActive, isMinimized, lastActivity,
   glowColor, onTerminalReady, onClose, onClick, registerRefit, registerFocus,
+  onBecameActive, onGlobalShortcut,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const termRef      = useRef<Terminal | null>(null);
-  const fitRef       = useRef<FitAddon | null>(null);
-  const termIdRef    = useRef<string | null>(null);
-  const mountedRef   = useRef(true);
+  const containerRef        = useRef<HTMLDivElement>(null);
+  const termRef             = useRef<Terminal | null>(null);
+  const fitRef              = useRef<FitAddon | null>(null);
+  const termIdRef           = useRef<string | null>(null);
+  const mountedRef          = useRef(true);
+  // Always hold the latest callbacks so effects with [] deps never go stale
+  const onGlobalShortcutRef = useRef(onGlobalShortcut);
+  const onBecameActiveRef   = useRef(onBecameActive);
+  const onTerminalReadyRef  = useRef(onTerminalReady);
+
+  useEffect(() => { onGlobalShortcutRef.current = onGlobalShortcut; }, [onGlobalShortcut]);
+  useEffect(() => { onBecameActiveRef.current   = onBecameActive;   }, [onBecameActive]);
+  useEffect(() => { onTerminalReadyRef.current  = onTerminalReady;  }, [onTerminalReady]);
 
   // Register focus so TerminalPane can steal keyboard focus to this terminal
   useEffect(() => {
@@ -159,12 +172,32 @@ export default function TerminalView({
         }
 
         termIdRef.current = terminal_id;
-        onTerminalReady(terminal_id);
+        onTerminalReadyRef.current(terminal_id);
+
+        // Send one authoritative resize right after the PTY is confirmed ready.
+        // This ensures the PTY width matches what xterm.js actually rendered,
+        // fixing the "────── wraps at wrong column" problem in Claude Code output.
+        requestAnimationFrame(() => {
+          try { fitRef.current?.fit(); } catch { /* ignore */ }
+          invoke('resize_terminal', {
+            terminalId: terminal_id,
+            cols: term.cols,
+            rows: term.rows,
+          }).catch(() => {});
+        });
 
       } catch (err) {
         term.write(`\r\n\x1b[31mFailed to start terminal:\x1b[0m\r\n${String(err)}\r\n`);
       }
     })();
+
+    // ── Track active slot when user clicks directly into the terminal ─
+    // xterm.js stops propagation on canvas clicks so our React onClick
+    // never fires. The textarea is what actually receives keyboard focus —
+    // listening to it is the reliable way to know which terminal is active.
+    term.textarea?.addEventListener('focus', () => {
+      if (mountedRef.current) onBecameActiveRef.current();
+    });
 
     // ── Input ─────────────────────────────────────────────────────
     const send = (data: string) => {
@@ -180,7 +213,18 @@ export default function TerminalView({
     // Return false = we handle it. Return true = xterm handles it.
     term.attachCustomKeyEventHandler((e: KeyboardEvent): boolean => {
       if (e.type !== 'keydown') return true;
-      const { metaKey, altKey, key } = e;
+      const { metaKey, altKey, ctrlKey, key } = e;
+
+      // Ctrl+1-9 — captured here because xterm stops propagation before the
+      // window listener in App.tsx ever sees it. Route to TerminalPane instead
+      // of sending the raw bytes to the PTY.
+      if (ctrlKey && !metaKey && !altKey) {
+        const n = parseInt(key, 10);
+        if (n >= 1 && n <= 9) {
+          onGlobalShortcutRef.current('ctrl-digit', n);
+          return false; // don't send to PTY
+        }
+      }
 
       // Cmd+Backspace → kill to beginning of line (same as Ctrl+U)
       if (metaKey && key === 'Backspace')   { send('\x15'); return false; }
@@ -199,6 +243,22 @@ export default function TerminalView({
 
       // Cmd+K → clear screen (Ctrl+L)
       if (metaKey && key === 'k')           { send('\x0c'); return false; }
+
+      // Shift+Enter → sends \ + Enter (backslash + carriage return).
+      // Claude Code treats a trailing \ as line continuation — keeps reading
+      // until you press plain Enter to submit. This makes Shift+Enter feel like
+      // "soft newline" even though the terminal doesn't natively support it.
+      // Shift+Enter → type \ into the buffer (no Enter).
+      // The user sees \ at the end of their line, then presses plain Enter.
+      // Claude Code sees \ + Enter = line continuation.
+      if (e.shiftKey && !metaKey && !ctrlKey && !altKey && key === 'Enter') {
+        send('\\');
+        return false;
+      }
+
+      // Cmd+O → workspace activation (handled by window listener in TerminalPane)
+      // Return false here so xterm doesn't also send bytes to the PTY
+      if (metaKey && key === 'o')           { return false; }
 
       // Let xterm handle everything else (including Cmd+C copy, Cmd+V paste, etc.)
       return true;

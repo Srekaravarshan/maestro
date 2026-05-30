@@ -120,6 +120,28 @@ export function isPortListening(port: number): boolean {
 // ── System ─────────────────────────────────────────────────────────────────
 
 /**
+ * Switches macOS to a specific Space (virtual desktop) number.
+ * Uses key codes because `keystroke "1" using control down` is unreliable
+ * on non-US keyboard layouts.
+ *
+ * Key codes for digits 1-9 on macOS:
+ *   1=18, 2=19, 3=20, 4=21, 5=23, 6=22, 7=26, 8=28, 9=25
+ */
+const SPACE_KEYCODES: Record<number, number> = {
+  1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25,
+};
+
+export function switchToSpace(spaceNumber: number): void {
+  const keyCode = SPACE_KEYCODES[spaceNumber];
+  if (!keyCode) return;
+  exec(
+    `/usr/bin/osascript -e 'tell application "System Events" to key code ${keyCode} using control down'`,
+    { timeout: 3_000 },
+    () => {}
+  );
+}
+
+/**
  * Focuses (or opens) a folder in VS Code — fire-and-forget, as fast as possible.
  *
  * Two-phase approach:

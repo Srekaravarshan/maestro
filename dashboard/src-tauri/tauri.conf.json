@@ -1,7 +1,7 @@
 {
-  "productName": "Worktree Dash",
+  "productName": "Maestro",
   "version": "0.1.0",
-  "identifier": "com.worktree-dash.app",
+  "identifier": "com.maestro-dev.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5174",
@@ -12,7 +12,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Worktree Dash",
+        "title": "Maestro",
         "width": 1440,
         "height": 900,
         "minWidth": 900,

@@ -2,8 +2,33 @@ mod pty_manager;
 use pty_manager::PtyManager;
 use serde::Serialize;
 use tauri::State;
+use std::process::Command;
+use std::path::Path;
 
 // ── Tauri commands ─────────────────────────────────────────────────────────
+
+/// Focus VS Code on the given worktree path — no HTTP roundtrip, runs native.
+/// Phase 1: osascript activate (~50ms, VS Code appears immediately)
+/// Phase 2: code CLI switches to the specific folder via IPC
+#[tauri::command]
+fn focus_vscode(worktree_path: String) {
+    std::thread::spawn(move || {
+        // Phase 1 — snap VS Code to front NOW
+        Command::new("/usr/bin/osascript")
+            .args(["-e", "tell application \"Visual Studio Code\" to activate"])
+            .spawn().ok();
+
+        // Phase 2 — switch to the right folder
+        let bundled = "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code";
+        if Path::new(bundled).exists() {
+            Command::new(bundled).arg(&worktree_path).spawn().ok();
+        } else {
+            Command::new("/usr/bin/open")
+                .args(["-a", "Visual Studio Code", &worktree_path])
+                .spawn().ok();
+        }
+    });
+}
 
 /// Spawn a new shell in the given worktree directory.
 /// Returns the terminal_id to use in subsequent calls.
@@ -68,6 +93,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(PtyManager::default())
         .invoke_handler(tauri::generate_handler![
+            focus_vscode,
             create_terminal,
             write_terminal,
             resize_terminal,

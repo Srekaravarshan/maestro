@@ -31,9 +31,8 @@ export default function App() {
         toggleSidebar();
         return;
       }
-      // Option+1-9 → open/focus Nth worktree from sidebar list
-      // Use e.code (physical key) because Option+digit produces special chars on macOS
-      if (e.altKey && !e.metaKey) {
+      // Ctrl+1-9 → open/focus Nth worktree from sidebar list
+      if (e.ctrlKey && !e.metaKey) {
         const match = e.code.match(/^Digit([1-9])$/);
         if (match) {
           const n = parseInt(match[1], 10);
