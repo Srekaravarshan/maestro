@@ -1,3 +1,4 @@
+import { SERVER_URL } from '../config.js';
 import { WorktreeInfo } from '../types';
 
 interface Props {
@@ -104,7 +105,7 @@ export default function AttentionQueue({ worktrees, focusingId, onFocusStart, on
             onClick={() => {
               if (focusingId) return;
               onFocusStart(wt.id);
-              fetch('/api/focus', {
+              fetch(`${SERVER_URL}/api/focus`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: wt.id }),

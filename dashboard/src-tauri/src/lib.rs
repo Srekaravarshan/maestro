@@ -1,11 +1,17 @@
 mod pty_manager;
 use pty_manager::PtyManager;
 use serde::Serialize;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 use std::process::Command;
 use std::path::Path;
 
 // ── Tauri commands ─────────────────────────────────────────────────────────
+
+/// Hide the main window (keep app + terminals running in background).
+#[tauri::command]
+fn hide_window(window: tauri::WebviewWindow) {
+    window.hide().ok();
+}
 
 /// Focus VS Code on the given worktree path — no HTTP roundtrip, runs native.
 /// Phase 1: osascript activate (~50ms, VS Code appears immediately)
@@ -91,8 +97,17 @@ fn list_terminals(state: State<PtyManager>) -> Vec<TerminalInfo> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // Second launch attempt → focus the existing window instead of opening a new one
+            if let Some(window) = app.get_webview_window("main") {
+                window.show().ok();
+                window.set_focus().ok();
+            }
+        }))
         .manage(PtyManager::default())
         .invoke_handler(tauri::generate_handler![
+            hide_window,
             focus_vscode,
             create_terminal,
             write_terminal,
@@ -100,9 +115,12 @@ pub fn run() {
             kill_terminal,
             list_terminals,
         ])
-        .on_window_event(|_window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                // PTY sessions are dropped automatically when the app exits
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Prevent default close. Tell the frontend so it can show a
+                // one-time banner before hiding. Terminals stay alive.
+                api.prevent_close();
+                let _ = window.emit("window-close-requested", ());
             }
         })
         .run(tauri::generate_context!())

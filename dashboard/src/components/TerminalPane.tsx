@@ -1,5 +1,7 @@
+import { SERVER_URL } from '../config.js';
 import { useState, useEffect, useRef, CSSProperties } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { sendNotification, isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
 import { OpenTerminal, WorktreeInfo } from '../types';
 import TerminalView from './TerminalView';
 
@@ -11,6 +13,7 @@ interface Props {
   onTerminalClosed: (path: string) => void;
   sidebarOpen:      boolean;
   onToggleSidebar:  () => void;
+  onGlowChange:     (hasGlowing: boolean) => void;
 }
 
 type ViewMode = 'split' | 'tabs';
@@ -31,7 +34,7 @@ function worktreeInfo(path: string, all: WorktreeInfo[]) {
 
 export default function TerminalPane({
   allWorktrees, pendingOpen, onPendingHandled, restoreTerminals, onTerminalClosed,
-  sidebarOpen, onToggleSidebar,
+  sidebarOpen, onToggleSidebar, onGlowChange,
 }: Props) {
   const [terminals, setTerminals]   = useState<OpenTerminal[]>([]);
   const [viewMode, setViewMode]     = useState<ViewMode>('split');
@@ -44,7 +47,35 @@ export default function TerminalPane({
   const focusRef  = useRef<Record<string, () => void>>({});
   // slotId → glow color (status-based) — set when attention is needed, cleared on focus
   const [glowingSlots, setGlowingSlots] = useState<Record<string, string>>({});
-  const prevStatusRef = useRef<Record<string, string>>({});
+  const prevStatusRef    = useRef<Record<string, string>>({});
+  const prevGlowingRef   = useRef<Record<string, string>>({});
+
+  // Request notification permission once on mount
+  useEffect(() => {
+    isPermissionGranted().then(granted => {
+      if (!granted) requestPermission();
+    });
+  }, []);
+
+  // ── Propagate glow state to App so Sidebar can read it ──────────────────
+  useEffect(() => {
+    onGlowChange(Object.keys(glowingSlots).length > 0);
+  }, [glowingSlots]);
+
+  // ── Fire Maestro notification when a new glow appears ───────────────────
+  useEffect(() => {
+    for (const [slotId, glowColor] of Object.entries(glowingSlots)) {
+      if (prevGlowingRef.current[slotId]) continue; // already notified for this glow
+      const slot   = terminals.find(t => t.slotId === slotId);
+      if (!slot) continue;
+      const status = glowColor === '#3b82f6' ? 'finished' :
+                     glowColor === '#ef4444' ? 'hit an error' : 'needs your input';
+      try {
+        sendNotification({ title: `Maestro — ${slot.branch}`, body: `Claude ${status}` });
+      } catch { /* permission not granted yet */ }
+    }
+    prevGlowingRef.current = { ...glowingSlots };
+  }, [glowingSlots, terminals]);
 
   // ── Detect attention-needed status changes → glow ───────────────────────
   useEffect(() => {
@@ -93,7 +124,7 @@ export default function TerminalPane({
         if (activeWorktreePath) {
           invoke('focus_vscode', { worktreePath: activeWorktreePath }).catch(() => {
             // Fallback to HTTP if Tauri command unavailable
-            fetch('/api/focus', {
+            fetch(`${SERVER_URL}/api/focus`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ id: activeWorktreePath }),
@@ -202,15 +233,9 @@ export default function TerminalPane({
   const canExpand = terminals.length > 2 && expandEnabled && viewMode === 'split';
 
   function handleTerminalClick(slotId: string) {
-    if (canExpand && expandedSlot === slotId) {
-      // Click the already-expanded terminal → collapse back to equal
-      setExpandedSlot(null);
-      setActiveSlot(slotId);
-      setTimeout(() => focusRef.current[slotId]?.(), 50);
-    } else {
-      // Same path as sidebar + Cmd+N: expand + focus
-      activateSlot(slotId);
-    }
+    // Always activate — clicking the expanded terminal stays expanded.
+    // Use Cmd+E to toggle expand mode off entirely.
+    activateSlot(slotId);
   }
 
   // ── Empty state ──────────────────────────────────────────────────────────
@@ -230,15 +255,21 @@ export default function TerminalPane({
     );
   }
 
-  const activeTerminal = terminals.find(t => t.slotId === activeSlot) ?? terminals[0]!;
+  const activeTerminal  = terminals.find(t => t.slotId === activeSlot) ?? terminals[0]!;
+  const hasGlowing      = Object.keys(glowingSlots).length > 0;
+  const headerBg        = hasGlowing ? '#3d2200' : '#0f0f0f';
+  const headerBorder    = hasGlowing ? '#f59e0b' : '#1e1e1e';
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#0d0d0d' }}>
 
-      {/* Top bar */}
+      {/* Top bar — turns amber when any terminal needs attention */}
       <div style={{
         display: 'flex', alignItems: 'center', height: 34, flexShrink: 0,
-        borderBottom: '1px solid #1e1e1e', background: '#0f0f0f', gap: 4, paddingRight: 8,
+        borderBottom: `1px solid ${headerBorder}`,
+        background: headerBg,
+        gap: 4, paddingRight: 8,
+        transition: 'background 0.3s, border-color 0.3s',
       }}>
         {/* Sidebar toggle — top left like Warp. Cmd+B also works. */}
         <button

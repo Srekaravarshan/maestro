@@ -51,19 +51,28 @@ curl -s -X POST http://localhost:3444/api/refresh \
   -H "Content-Type: application/json" \
   -d '{}' >/dev/null 2>&1 &
 
-# ── macOS notification on idle (task #4) ──────────────────────────────────
-if [ "$STATE" = "idle" ]; then
+# ── macOS notification on idle OR waiting ─────────────────────────────────
+if [ "$STATE" = "idle" ] || [ "$STATE" = "waiting" ]; then
+  if [ "$STATE" = "idle" ]; then
+    NOTIF_TITLE="Done: $BR"
+    NOTIF_MSG="Claude finished — click to focus"
+    NOTIF_SOUND="Glass"
+  else
+    NOTIF_TITLE="⚠ Needs input: $BR"
+    NOTIF_MSG="Claude has a question — click to focus"
+    NOTIF_SOUND="Ping"
+  fi
   if command -v terminal-notifier &>/dev/null; then
     terminal-notifier \
-      -title "Done: $BR" \
+      -title "$NOTIF_TITLE" \
       -subtitle "$REPO" \
-      -message "Claude finished — click to focus" \
-      -sound Glass \
+      -message "$NOTIF_MSG" \
+      -sound "$NOTIF_SOUND" \
       -execute "open -a 'Visual Studio Code' '$DIR'" \
       2>/dev/null &
   else
     # Fallback: macOS built-in osascript notification (no click-to-focus)
-    osascript -e "display notification \"Claude finished — $BR ($REPO)\" with title \"Worktree Dash\" sound name \"Glass\"" \
+    osascript -e "display notification \"$NOTIF_MSG — $BR ($REPO)\" with title \"Maestro\" sound name \"$NOTIF_SOUND\"" \
       2>/dev/null &
   fi
 fi

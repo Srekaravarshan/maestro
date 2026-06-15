@@ -1,0 +1,97 @@
+# ~/.config/tmuxinator/slot.yml
+#
+# One template drives all three slots. The slot number derives ports, colors,
+# and session name — you never pick a port manually again.
+#
+# USAGE:
+#   slot 1 /Users/srekaravarshannk/Documents/SurveySparrow/app-v1 main
+#   slot 1 /Users/srekaravarshannk/Documents/SurveySparrow/worktree1 email-share-amp
+#   slot 2 /Users/srekaravarshannk/Documents/SurveySparrow/worktree2 echo-v2
+#   slot 3 /Users/srekaravarshannk/Documents/SurveySparrow/worktree3 hotfix
+#
+#   (The `slot` shell function calls tmuxinator with the right args — use that, not tmuxinator directly)
+#
+# PORT MAP (memorize once):
+#   hundreds digit = slot    last digit = service
+#   Slot 1 → 80xx            x0 = server (Rails)
+#   Slot 2 → 81xx            x1 = client
+#   Slot 3 → 82xx            x2 = super-admin-client (optional)
+#   e.g. 8100 = slot 1 server   8101 = slot 1 client   8102 = slot 1 super-admin
+#
+# COLORS (same across VS Code Peacock, tmux bar, Maestro):
+#   Slot 1 → Blue  (#007ACC)
+#   Slot 2 → Amber (#F59E0B)
+#   Slot 3 → Pink  (#EC4899)
+#
+# PREREQUISITES:
+#   gem install tmuxinator
+#   # Add to ~/.zshrc: export EDITOR='vim'  (tmuxinator needs $EDITOR set)
+
+<%
+  slot  = (@settings["SLOT"] || "1").to_i
+  base  = 8000 + (slot - 1) * 100
+  path  = (@settings["WPATH"] || Dir.pwd)
+  name  = @settings["NAME"] || "slot#{slot}"
+
+  # Tmux colour codes that match the hex palette above
+  tmux_colors = { 1 => "colour33", 2 => "colour214", 3 => "colour205" }
+  tmux_color  = tmux_colors[slot] || "colour245"
+
+  # Hex colors for reference (used in VS Code Peacock + Maestro)
+  hex_colors = { 1 => "#007ACC", 2 => "#F59E0B", 3 => "#EC4899" }
+  hex_color  = hex_colors[slot] || "#888888"
+%>
+
+# ── Session identity ──────────────────────────────────────────────────────────
+
+name: slot<%= slot %>-<%= name %>
+root: <%= path %>
+
+# ── Windows ───────────────────────────────────────────────────────────────────
+
+windows:
+
+  # ── services ─────────────────────────────────────────────────────────────
+  # All infra for this feature in one window, tiled so you see every process.
+  # Open this window only when you need to check on services — leave it alone.
+
+  - services:
+      layout: tiled
+      panes:
+
+        # Rails server — port <%= base %>
+        # The set-option commands here apply status bar color to THIS session only (no -g flag).
+        # They run once at startup, before start-server takes over the pane.
+        - server:
+          - cd <%= path %>
+          - tmux set-option status-style "bg=<%= tmux_color %>,fg=black bold"
+          - tmux set-option status-left "#[bold] ◆ SLOT <%= slot %> · <%= name %>  "
+          - tmux set-option status-left-length 52
+          - tmux set-option status-right "  server:<%= base %>  client:<%= base + 1 %>  "
+          - tmux set-option status-right-length 32
+          - tmux set-option status-interval 5
+          - PORT=<%= base %> npm run start-server
+
+        # Client dev server — port <%= base + 1 %>
+        - client:
+          - cd <%= path %>
+          - PORT=<%= base + 1 %> npm run start-client
+
+        # Super-admin client — port <%= base + 2 %>
+        # Only needed when building/testing a feature that touches super-admin.
+        # Uncomment this pane when you need it; comment it back out otherwise.
+        # - super-admin:
+        #   - cd <%= path %>
+        #   - PORT=<%= base + 2 %> npm run start-super-admin-client
+
+  # ── agent ─────────────────────────────────────────────────────────────────
+  # The Claude Code session for this feature lives HERE — same slot, same color.
+  # Agents and services are both "processes in this room." No separate app needed.
+  # Maestro monitors this session via Claude hooks; it doesn't spawn it.
+
+  - agent:
+      root: <%= path %>
+      panes:
+        - claude:
+          - cd <%= path %>
+          - claude

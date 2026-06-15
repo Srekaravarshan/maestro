@@ -1,0 +1,25 @@
+# ~/.config/tmuxinator/slack-agent.yml
+#
+# USAGE:
+#   tmuxinator start slack-agent
+#
+# Or add this alias to ~/.zshrc:
+#   alias slack-agent="tmuxinator start slack-agent"
+
+name: slack-agent
+root: ~/Documents/personal/agent-srekaran
+
+windows:
+
+  - services:
+      layout: even-horizontal
+      panes:
+
+        # Dev server
+        - dev:
+          - npm run dev
+
+        # ngrok tunnel — exposes port 8787 to the internet
+        # TERM=xterm-256color fixes "does not support dynamic ui on solaris" error
+        - ngrok:
+          - TERM=xterm-256color ngrok http 8787

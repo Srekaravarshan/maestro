@@ -1,3 +1,4 @@
+import { SERVER_URL } from '../config.js';
 /**
  * Sidebar — 300px left panel.
  * Contains all monitoring: stats, attention queue, worktree list, activity feed.
@@ -155,17 +156,24 @@ interface Props {
   onApplyColors:     () => void;
   onClearColors:     () => void;
   isOpen:            boolean;
+  hasGlowing:        boolean;
 }
 
 export default function Sidebar({
   state, connected, focusingId, openTerminalPaths,
   onFocusStart, onFocusDone, onOpenTerminal,
   colorOp, onApplyColors, onClearColors,
+  hasGlowing,
   isOpen,
 }: Props) {
   const allWorktrees = state?.repos.flatMap(r => r.worktrees) ?? [];
-  const working = allWorktrees.filter(w => w.claude === 'working' || w.agent?.status === 'running').length;
-  const waiting = allWorktrees.filter(w => w.claude === 'waiting' || w.agent?.status === 'blocked').length;
+  const working     = allWorktrees.filter(w => w.claude === 'working' || w.agent?.status === 'running').length;
+  const waiting     = allWorktrees.filter(w => w.claude === 'waiting' || w.agent?.status === 'blocked').length;
+  // Amber only when there are UNACKNOWLEDGED glowing terminals.
+  // Sourced from glowingSlots in TerminalPane — clears when user focuses the terminal.
+  // This avoids false positives from stale hook state files.
+  const sidebarBg     = hasGlowing ? '#2a1500' : '#0a0a0a';
+  const sidebarBorder = hasGlowing ? '#f59e0b88' : '#1a1a1a';
 
   return (
     <div style={{
@@ -173,10 +181,9 @@ export default function Sidebar({
       flexShrink:    0,
       display:       'flex',
       flexDirection: 'column',
-      background:    '#0a0a0a',
-      borderRight:   isOpen ? '1px solid #1a1a1a' : 'none',
+      background:    sidebarBg,
+      borderRight:   isOpen ? `1px solid ${sidebarBorder}` : 'none',
       overflow:      'hidden',
-      // No animation — instant toggle, no reflow during resize
     }}>
       {/* ── Header ──────────────────────────────────────────────────── */}
       <div style={{
@@ -253,7 +260,7 @@ export default function Sidebar({
                 onOpen={() => onOpenTerminal(wt.id)}
                 onFocusVSCode={() => {
                   onFocusStart(wt.id);
-                  fetch('/api/focus', {
+                  fetch(`${SERVER_URL}/api/focus`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ id: wt.id }),

@@ -1,7 +1,7 @@
 {
   "productName": "Maestro",
   "version": "0.1.0",
-  "identifier": "com.maestro-dev.app",
+  "identifier": "com.maestro-dev.maestro",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5174",
@@ -29,6 +29,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": []
+    "icon": [],
+    "macOS": {
+      "entitlements": "./entitlements.plist"
+    }
   }
 }

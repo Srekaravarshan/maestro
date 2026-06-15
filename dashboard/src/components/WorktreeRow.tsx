@@ -1,3 +1,4 @@
+import { SERVER_URL } from '../config.js';
 import { useState, useRef } from 'react';
 import { WorktreeInfo } from '../types';
 
@@ -42,7 +43,7 @@ const AGENT_LABEL: Record<string, string> = {
 };
 
 async function postFocus(id: string) {
-  await fetch('/api/focus', {
+  await fetch(`${SERVER_URL}/api/focus`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id }),
@@ -60,7 +61,7 @@ function timeAgo(ms: number | null | undefined): string {
 }
 
 async function postOpenBrowser(port: number) {
-  await fetch('/api/open-browser', {
+  await fetch(`${SERVER_URL}/api/open-browser`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ port }),

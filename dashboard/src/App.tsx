@@ -1,7 +1,10 @@
+import { SERVER_URL } from './config.js';
 import { useState, useEffect, useRef } from 'react';
 import { DashState } from './types';
 import Sidebar from './components/Sidebar';
 import TerminalPane from './components/TerminalPane';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 export default function App() {
   const [state, setState]         = useState<DashState | null>(null);
@@ -20,7 +23,27 @@ export default function App() {
   const [colorOp, setColorOp] = useState<null | 'apply' | 'clear'>(null);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [hasGlowing, setHasGlowing]   = useState(false);
+  const [showCloseBanner, setShowCloseBanner] = useState(false);
   const toggleSidebar = () => setSidebarOpen(p => !p);
+
+  // Handle red-dot close — hide window, show one-time banner
+  useEffect(() => {
+    const unlisten = listen('window-close-requested', () => {
+      const seen = localStorage.getItem('maestro-close-tip');
+      if (!seen) {
+        setShowCloseBanner(true);
+        localStorage.setItem('maestro-close-tip', '1');
+        setTimeout(() => {
+          setShowCloseBanner(false);
+          invoke('hide_window').catch(() => {});
+        }, 2500);
+      } else {
+        invoke('hide_window').catch(() => {});
+      }
+    });
+    return () => { unlisten.then(f => f()); };
+  }, []);
 
   // Cmd+B — global sidebar toggle
   // Ctrl+1-9 — open/activate the Nth worktree from the sidebar
@@ -57,7 +80,7 @@ export default function App() {
     let retry: ReturnType<typeof setTimeout>;
 
     function connect() {
-      es = new EventSource('/events');
+      es = new EventSource(`${SERVER_URL}/events`);
       es.addEventListener('state', (e) => {
         setState(JSON.parse(e.data) as DashState);
         setConnected(true);
@@ -76,7 +99,7 @@ export default function App() {
     if (colorOp) return;
     setColorOp('apply');
     try {
-      await fetch('/api/set-colors-all', { method: 'POST' });
+      await fetch(`${SERVER_URL}/api/set-colors-all`, { method: 'POST' });
       alert('Colors applied!\nReload each VS Code window: Cmd+Shift+P → Reload Window');
     } finally { setColorOp(null); }
   }
@@ -85,7 +108,7 @@ export default function App() {
     if (colorOp) return;
     setColorOp('clear');
     try {
-      await fetch('/api/clear-colors-all', { method: 'POST' });
+      await fetch(`${SERVER_URL}/api/clear-colors-all`, { method: 'POST' });
       alert('Colors cleared!\nReload each VS Code window: Cmd+Shift+P → Reload Window');
     } finally { setColorOp(null); }
   }
@@ -104,9 +127,21 @@ export default function App() {
   const restoreTerminals = state?.restoreTerminals ?? [];
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: '#0d0d0d' }}>
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: '#0d0d0d', position: 'relative' }}>
+      {showCloseBanner && (
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 100,
+          background: '#1a1a1a', borderTop: '1px solid #333',
+          padding: '10px 20px', fontSize: 12, color: '#aaa',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        }}>
+          <span>Maestro is still running — terminals stay alive. Click the Dock icon to reopen.</span>
+          <span style={{ color: '#555', fontSize: 11 }}>Use Cmd+Q to quit completely</span>
+        </div>
+      )}
       <Sidebar
         isOpen={sidebarOpen}
+        hasGlowing={hasGlowing}
         state={state}
         connected={connected}
         focusingId={focusingId}
@@ -127,6 +162,7 @@ export default function App() {
         onTerminalClosed={handleTerminalClosed}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={toggleSidebar}
+        onGlowChange={setHasGlowing}
       />
     </div>
   );
