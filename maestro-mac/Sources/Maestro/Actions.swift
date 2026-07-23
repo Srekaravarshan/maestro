@@ -2,14 +2,15 @@ import AppKit
 
 /// Side-effecting actions (open, copy, sound, pins, ideas). All local.
 enum Actions {
-    // ── Open the worktree in its host app ────────────────────────────────────
-    static func open(_ wt: Worktree) { openPath(wt.id, wt.host) }
+    // ── Open the session in its host app ─────────────────────────────────────
+    static func open(_ s: Session) { openPath(s.cwd, s.host) }
 
     static func openPath(_ id: String, _ host: String?) {
         switch host {
         case "app":      run("/usr/bin/open", ["-b", "com.anthropic.claudefordesktop"])
         case "iterm":    run("/usr/bin/open", ["-a", "iTerm"])
         case "terminal": run("/usr/bin/open", ["-a", "Terminal"])
+        case "warp":     run("/usr/bin/open", ["-a", "Warp"])
         default:         run("/usr/bin/open", ["-a", "Visual Studio Code", id])
         }
     }
@@ -19,8 +20,8 @@ enum Actions {
         NSPasteboard.general.setString(s, forType: .string)
     }
 
-    static func copyResume(_ wt: Worktree) {
-        let cmd = wt.sessionId.map { "cd \"\(wt.id)\" && claude --resume \($0)" } ?? "cd \"\(wt.id)\" && claude"
+    static func copyResume(_ s: Session) {
+        let cmd = "cd \"\(s.cwd)\" && claude --resume=\(s.id)"
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(cmd, forType: .string)
     }
@@ -36,9 +37,12 @@ enum Actions {
         NSSound(named: NSSound.Name(name))?.play()
     }
 
-    // ── Pins (write the full ordered list; mirrors /api/pins/set) ─────────────
-    static func setPins(_ order: [String]) {
+    // ── Pins (write the full ordered list) ────────────────────────────────────
+    static func setPins(_ order: [String]) {                 // folders (by cwd)
         writeObject(Paths.pinsFile, ["pins": order])
+    }
+    static func setSessionPins(_ order: [String]) {          // sessions (by sessionId)
+        writeObject(Paths.sessionPinsFile, ["pins": order])
     }
 
     // ── Ideas / notes ─────────────────────────────────────────────────────────

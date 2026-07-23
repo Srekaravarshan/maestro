@@ -18,12 +18,23 @@ fi
 # ── Read cwd from Claude Code's JSON stdin ─────────────────────────────────
 INPUT=$(cat)
 
-# Try jq first, fall back to Python 3
+# Ignore Maestro's own headless sends (chat "send" feature runs `claude --print
+# --resume` with MAESTRO_HEADLESS=1). Otherwise those fires would overwrite the
+# folder's host/state with wherever the app launched them.
+if [ -n "$MAESTRO_HEADLESS" ]; then
+  exit 0
+fi
+
+# Try jq first, fall back to Python 3. We read BOTH the cwd and the session_id so
+# status can be tracked per-session (a folder can host several Claude sessions).
 if command -v jq &>/dev/null; then
   DIR=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+  SID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 elif command -v python3 &>/dev/null; then
   DIR=$(echo "$INPUT" | python3 -c \
     "import sys,json; d=json.load(sys.stdin); print(d.get('cwd',''))" 2>/dev/null)
+  SID=$(echo "$INPUT" | python3 -c \
+    "import sys,json; d=json.load(sys.stdin); print(d.get('session_id',''))" 2>/dev/null)
 fi
 # Final fallback
 [ -z "$DIR" ] && DIR=$(pwd)
@@ -47,13 +58,22 @@ elif [ "$TERM_PROGRAM" = "iTerm.app" ]; then
   HOST="iterm"
 elif [ "$TERM_PROGRAM" = "Apple_Terminal" ]; then
   HOST="terminal"
+elif [ "$TERM_PROGRAM" = "WarpTerminal" ]; then
+  HOST="warp"
+elif [ "$TERM_PROGRAM" = "ghostty" ] || [ "$TERM_PROGRAM" = "WezTerm" ]; then
+  HOST="terminal"
 else
   HOST="app"
 fi
 
-# ── Write status file ──────────────────────────────────────────────────────
-# Key = first 12 chars of SHA-1 of the absolute path — stable across renames
-KEY=$(printf '%s' "$DIR" | shasum | cut -c1-12)
+# ── Write status file (keyed by SESSION, not folder) ──────────────────────
+# One status file per Claude session so a folder can show several sessions.
+# Key = session_id when available; fall back to the folder hash for safety.
+if [ -n "$SID" ]; then
+  KEY="$SID"
+else
+  KEY=$(printf '%s' "$DIR" | shasum | cut -c1-12)
+fi
 STATUS_FILE=~/.worktree-dash/status/"$KEY".json
 mkdir -p ~/.worktree-dash/status
 
@@ -68,8 +88,9 @@ if [ "$STATE" = "waiting" ] && [ -f "$STATUS_FILE" ]; then
   fi
 fi
 
-printf '{"id":"%s","repo":"%s","branch":"%s","state":"%s","ts":%s,"host":"%s"}\n' \
-  "$DIR" "$REPO" "$BR" "$STATE" "$(date +%s)" "$HOST" \
+# `id` stays = cwd (folder) for grouping; `sessionId` identifies the session.
+printf '{"id":"%s","sessionId":"%s","cwd":"%s","repo":"%s","branch":"%s","state":"%s","ts":%s,"host":"%s"}\n' \
+  "$DIR" "$SID" "$DIR" "$REPO" "$BR" "$STATE" "$(date +%s)" "$HOST" \
   > "$STATUS_FILE"
 
 # ── Ping dashboard for immediate update (fire-and-forget) ─────────────────

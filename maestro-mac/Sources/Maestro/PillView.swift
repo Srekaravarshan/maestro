@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 
 func statusColor(_ state: String) -> Color {
     switch state {
@@ -31,12 +30,29 @@ func shortPhrase(_ state: String) -> String {
     }
 }
 
+private let hmFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f }()
+private let mdFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM d"; return f }()
+
+func timeLabel(_ t: TimeInterval) -> String {
+    guard t > 0 else { return "—" }
+    let d = Date(timeIntervalSince1970: t)
+    return Calendar.current.isDateInToday(d) ? hmFmt.string(from: d) : mdFmt.string(from: d)
+}
+
+func hostIcon(_ host: String?) -> String {
+    switch host {
+    case "vscode":                            return "chevron.left.forwardslash.chevron.right"
+    case "iterm", "terminal", "warp", "tmux": return "terminal"
+    case "app":                               return "sparkles"
+    default:                                  return "arrow.up.right.square"
+    }
+}
+
 private struct HeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
-/// The pill's own size (not the window) — the window snaps to this after a transition.
 private struct SizeKey: PreferenceKey {
     static var defaultValue: CGSize = .zero
     static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
@@ -46,9 +62,6 @@ extension View {
     @ViewBuilder func applyIf<T: View>(_ cond: Bool, _ transform: (Self) -> T) -> some View {
         if cond { transform(self) } else { self }
     }
-
-    /// Show `cursor` while hovering this view. Uses push/pop so nested regions
-    /// (row → button) restore the parent's cursor cleanly on exit.
     func cursor(_ cursor: NSCursor) -> some View {
         onHover { inside in
             if inside { cursor.push() } else { NSCursor.pop() }
@@ -66,30 +79,37 @@ private struct WindowAccessor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+/// Pages the expanded card can show (a simple nav stack).
+enum CardRoute: Equatable {
+    case list
+    case folder(String)                         // cwd
+    case notes(String)                          // cwd
+    case chat(id: String, cwd: String, folder: String)
+}
+
 struct PillView: View {
     @ObservedObject var store: WorktreeStore
     @ObservedObject var hud: HUDState
+
     @State private var window: NSWindow?
     @State private var didInitialCenter = false
     @State private var dragStartMouse: CGPoint?
     @State private var dragStartOrigin: CGPoint?
-    // Accordion open/closed — persisted across launches (UserDefaults).
-    @AppStorage("maestro.activeOpen") private var activeOpen = true
     @AppStorage("maestro.moreOpen") private var moreOpen = false
     @State private var contentHeight: CGFloat = 0
-    @State private var overPinned = false
-    @State private var overActive = false
-    @State private var overMore = false
-    @FocusState private var focused: String?   // keyed focus: "row:<cwd>", "notes:<cwd>", "sec:ACTIVE"/"sec:MORE"
-    @State private var displayedMode: HUDMode = .collapsed   // what's actually rendered (fades between states)
+    @State private var displayedMode: HUDMode = .collapsed
     @State private var pillOpacity: Double = 1
+    @State private var stack: [CardRoute] = []      // nav stack; current = last
 
     private let maxBodyHeight: CGFloat = 440
+    private let shadowMargin: CGFloat = 20
+
+    private var route: CardRoute { stack.last ?? .list }
+    private func push(_ r: CardRoute) { stack.append(r) }
+    private func pop() { if !stack.isEmpty { stack.removeLast() } }
+    private func popToRoot() { stack.removeAll() }
 
     var body: some View {
-        // The root fills the (possibly larger, during a transition) window; the pill
-        // is top-anchored. The empty area is transparent, so the window snapping back
-        // to the pill's size afterwards is invisible.
         ZStack(alignment: .top) {
             Color.clear
             pill
@@ -99,30 +119,32 @@ struct PillView: View {
         .environment(\.colorScheme, .dark)
     }
 
-    private let shadowMargin: CGFloat = 20   // transparent room around the pill for the shadow
-
     private var pill: some View {
         content
             .frame(width: hud.mode == .expanded ? 360 : nil)
-            // Solid dark (not .ultraThinMaterial) so the pill looks identical over any
-            // app — a material samples/blurs the backdrop and turns milky over white.
             .background(Color(red: 0.10, green: 0.11, blue: 0.13), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.white.opacity(0.12)))
             .shadow(color: .black.opacity(0.40), radius: 14, x: 0, y: 6)
-            // Measure the padded frame so the window includes the shadow's margin
-            // (transparent) — otherwise the window edge crops the shadow.
             .padding(shadowMargin)
             .background(GeometryReader { g in Color.clear.preference(key: SizeKey.self, value: g.size) })
             .opacity(pillOpacity)
             .onPreferenceChange(SizeKey.self) { fitWindow($0) }
             .onChange(of: hud.mode) { newMode in
+                // Keep the nav stack across collapse so reopening returns to the same page.
                 guard newMode != displayedMode else { return }
-                // Fade out, swap + resize while invisible (no size tween → no width glitch), fade in.
-                withAnimation(.easeOut(duration: 0.12)) { pillOpacity = 0 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                if newMode == .expanded {
+                    pillOpacity = 0
                     displayedMode = newMode
-                    DispatchQueue.main.async {   // let layout + window snap happen before fading in
+                    DispatchQueue.main.async {
                         withAnimation(.easeIn(duration: 0.18)) { pillOpacity = 1 }
+                    }
+                } else {
+                    withAnimation(.easeOut(duration: 0.12)) { pillOpacity = 0 }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                        displayedMode = newMode
+                        DispatchQueue.main.async {
+                            withAnimation(.easeIn(duration: 0.18)) { pillOpacity = 1 }
+                        }
                     }
                 }
             }
@@ -138,6 +160,7 @@ struct PillView: View {
         }
     }
 
+    // ── Window drag ────────────────────────────────────────────────────────
     private var windowDrag: some Gesture {
         DragGesture(minimumDistance: 3, coordinateSpace: .global)
             .onChanged { _ in
@@ -145,7 +168,7 @@ struct PillView: View {
                 let mouse = NSEvent.mouseLocation
                 if dragStartMouse == nil {
                     dragStartMouse = mouse; dragStartOrigin = w.frame.origin
-                    NSCursor.closedHand.push()          // grabbing cursor while moving
+                    NSCursor.closedHand.push()
                 }
                 guard let sm = dragStartMouse, let so = dragStartOrigin else { return }
                 w.setFrameOrigin(NSPoint(x: so.x + (mouse.x - sm.x), y: so.y + (mouse.y - sm.y)))
@@ -156,11 +179,9 @@ struct PillView: View {
             }
     }
 
-    private func expand()   { hud.mode = .expanded }   // PillView fades on mode change
+    private func expand()   { hud.mode = .expanded }
     private func collapse() { hud.mode = .collapsed }
 
-    /// Size this pill's own window to the measured pill (keeps top-center on its own
-    /// screen). Runs over transparent area so the resize is invisible.
     private func fitWindow(_ size: CGSize) {
         guard let w = window, size.width > 1, size.height > 1 else { return }
         if !didInitialCenter, let vf = (w.screen ?? NSScreen.main)?.visibleFrame {
@@ -175,51 +196,10 @@ struct PillView: View {
         if !target.equalTo(old) { w.setFrame(target, display: true) }
     }
 
-    /// Snap the pill back to top-center of its own screen (right-click → Reset position).
     private func recenter() {
         guard let w = window, let vf = (w.screen ?? NSScreen.main)?.visibleFrame else { return }
         let s = w.frame.size
         w.setFrameOrigin(NSPoint(x: vf.midX - s.width / 2, y: vf.maxY - s.height - 6))
-    }
-
-    // ── Drag between sections: PINNED pins, ACTIVE/MORE unpins ────────────────
-    enum DropZone { case pinned, other }
-
-    private func handleDrop(_ providers: [NSItemProvider], _ zone: DropZone) -> Bool {
-        loadCwd(providers) { cwd in
-            var order = pinnedOrder()
-            switch zone {
-            case .pinned: if !order.contains(cwd) { order.append(cwd) }
-            case .other:  order.removeAll { $0 == cwd }
-            }
-            Actions.setPins(order); store.reload()
-        }
-        return true
-    }
-
-    private func reorderPinned(_ dragged: String, onto targetCwd: String) {
-        guard dragged != targetCwd else { return }
-        var order = pinnedOrder()
-        if let from = order.firstIndex(of: dragged), let to = order.firstIndex(of: targetCwd) {
-            order.remove(at: from)
-            order.insert(dragged, at: min(to, order.count))
-        } else if let to = order.firstIndex(of: targetCwd) {
-            order.insert(dragged, at: to)
-        } else {
-            order.append(dragged)
-        }
-        Actions.setPins(order); store.reload()
-    }
-
-    private func pinnedOrder() -> [String] {
-        store.worktrees.filter { $0.tier == "pinned" }.sorted { $0.pinIndex < $1.pinIndex }.map { $0.id }
-    }
-
-    private func loadCwd(_ providers: [NSItemProvider], _ done: @escaping (String) -> Void) {
-        guard let p = providers.first else { return }
-        _ = p.loadObject(ofClass: NSString.self) { obj, _ in
-            if let cwd = obj as? String { DispatchQueue.main.async { done(cwd) } }
-        }
     }
 
     // ── Collapsed ─────────────────────────────────────────────────────────────
@@ -234,10 +214,10 @@ struct PillView: View {
         .padding(.horizontal, 14).padding(.vertical, 8)
         .fixedSize()
         .contentShape(Rectangle())
-        .onTapGesture { expand() }               // single click — instant, no double-tap delay
+        .onTapGesture { expand() }
         .gesture(windowDrag)
         .cursor(.openHand)
-        .contextMenu { Button("Reset position", action: recenter) }   // right-click to reset
+        .contextMenu { Button("Reset position", action: recenter) }
     }
 
     private func seg(_ text: String, _ color: Color) -> some View {
@@ -259,7 +239,7 @@ struct PillView: View {
                     .foregroundStyle(statusColor(a.state))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(statusColor(a.state).opacity(0.5)))
             }.buttonStyle(.plain).cursor(.pointingHand)
-            Button { hud.attention = nil } label: {   // dismiss the banner
+            Button { hud.attention = nil } label: {
                 Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(.secondary)
                     .frame(width: 24, height: 24).contentShape(Rectangle())
             }.buttonStyle(.plain).cursor(.pointingHand).help("Dismiss")
@@ -267,26 +247,41 @@ struct PillView: View {
         .padding(.horizontal, 14).padding(.vertical, 11)
         .fixedSize()
         .overlay(alignment: .leading) { Rectangle().fill(statusColor(a.state)).frame(width: 4) }
-        .onTapGesture { expand() }               // single click — instant
+        .onTapGesture { expand() }
         .gesture(windowDrag)
         .cursor(.openHand)
         .contextMenu { Button("Reset position", action: recenter) }
     }
 
-    // ── Expanded ──────────────────────────────────────────────────────────────
-    private var expandedView: some View {
-        let pinned = store.worktrees.filter { $0.tier == "pinned" }
-        let active = store.worktrees.filter { $0.tier == "active" }
-        let other  = store.worktrees.filter { $0.tier == "other" }
+    // ── Expanded: route to a page ─────────────────────────────────────────────
+    @ViewBuilder private var expandedView: some View {
+        switch route {
+        case .list:
+            listView
+        case .folder(let cwd):
+            folderPage(cwd)
+        case .notes(let cwd):
+            NotesPage(folderName: (cwd as NSString).lastPathComponent, cwd: cwd, store: store,
+                      onBack: { pop() }, onClose: { collapse() })
+        case .chat(let id, let cwd, let folder):
+            ChatView(folder: folder, sessionId: id, cwd: cwd,
+                     onBack: { pop() }, onClose: { collapse() })
+        }
+    }
+
+    // ── Root: folder list ─────────────────────────────────────────────────────
+    private var listView: some View {
+        let pinned = store.folders.filter { $0.tier == "pinned" }
+        let active = store.folders.filter { $0.tier == "active" }
+        let other  = store.folders.filter { $0.tier == "other" }
         return VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Text("MAESTRO").font(.system(size: 12, weight: .bold, design: .monospaced)).kerning(1).foregroundStyle(.white)
-                Text("\(store.worktrees.count) trees").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                Text("\(store.folders.count) folders").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 Spacer()
                 Button { collapse() } label: {
                     Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.secondary)
-                        .frame(width: 26, height: 26)          // generous hit area
-                        .contentShape(Rectangle())
+                        .frame(width: 26, height: 26).contentShape(Rectangle())
                 }.buttonStyle(.plain).cursor(.pointingHand)
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
@@ -296,100 +291,105 @@ struct PillView: View {
 
             Divider().overlay(.white.opacity(0.1))
 
-            ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
-                    VStack(spacing: 0) {
-                        sectionLabel("PINNED")
-                        if pinned.isEmpty {
-                            Text("drag a row here to pin")
-                                .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary.opacity(0.6))
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 8)
-                        } else {
-                            ForEach(pinned) { wt in
-                                RowView(wt: wt, store: store, focus: $focused, onMove: move, onPinned: revealAndFocusPin,
-                                        onDropRow: { dragged in reorderPinned(dragged, onto: wt.id) })
-                                    .id("row:\(wt.id)")
-                            }
-                        }
+                    if store.folders.isEmpty {
+                        Text("No Claude sessions found.")
+                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 24)
                     }
-                    .background(overPinned ? statusColor("done").opacity(0.08) : .clear)
-                    .onDrop(of: [.text], isTargeted: $overPinned) { handleDrop($0, .pinned) }
-
-                    VStack(spacing: 0) {
-                        if !active.isEmpty {
-                            accordionHeader("ACTIVE", count: active.count, isOpen: activeOpen) { activeOpen.toggle() }
-                            if activeOpen { rows(active) }
-                        } else if pinned.isEmpty {
-                            Text("nothing active").font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 16)
-                        }
-                    }
-                    .background(overActive ? Color.white.opacity(0.05) : .clear)
-                    .onDrop(of: [.text], isTargeted: $overActive) { handleDrop($0, .other) }
-
+                    if !pinned.isEmpty { sectionLabel("PINNED"); folderList(pinned) }
+                    if !active.isEmpty { sectionLabel("ACTIVE"); folderList(active) }
                     if !other.isEmpty {
-                        VStack(spacing: 0) {
-                            accordionHeader("MORE", count: other.count, isOpen: moreOpen) { moreOpen.toggle() }
-                            if moreOpen { rows(other) }
-                        }
-                        .background(overMore ? Color.white.opacity(0.05) : .clear)
-                        .onDrop(of: [.text], isTargeted: $overMore) { handleDrop($0, .other) }
+                        accordionHeader("MORE", count: other.count, isOpen: moreOpen) { moreOpen.toggle() }
+                        if moreOpen { folderList(other) }
                     }
                 }
-                .background(GeometryReader { g in
-                    Color.clear.preference(key: HeightKey.self, value: g.size.height)
-                })
+                .padding(.bottom, 10)
+                .background(GeometryReader { g in Color.clear.preference(key: HeightKey.self, value: g.size.height) })
             }
             .frame(height: min(max(contentHeight, 1), maxBodyHeight))
             .onPreferenceChange(HeightKey.self) { h in
                 if abs(h - contentHeight) > 0.5 { contentHeight = h }
             }
-            .onChange(of: focused) { id in
-                guard let id else { return }
-                withAnimation(.easeOut(duration: 0.18)) { proxy.scrollTo(id, anchor: .center) }
+        }
+    }
+
+    private func folderList(_ list: [Folder]) -> some View {
+        ForEach(list) { f in
+            FolderView(folder: f, store: store,
+                       onOpenFolder: { push(.folder(f.id)) },
+                       onPinFolder: { toggleFolderPin(f) },
+                       onPinSession: { s in toggleSessionPin(s) },
+                       onOpenChat: { s in push(.chat(id: s.id, cwd: s.cwd, folder: f.name)) })
+        }
+    }
+
+    // ── Folder page (all sessions + Notes row) ────────────────────────────────
+    @ViewBuilder private func folderPage(_ cwd: String) -> some View {
+        if let f = store.folders.first(where: { $0.id == cwd }) {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Button { pop() } label: {
+                        Image(systemName: "chevron.left").font(.system(size: 12, weight: .bold)).foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24).contentShape(Rectangle())
+                    }.buttonStyle(.plain).cursor(.pointingHand).help("Back")
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(f.name).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(.white).lineLimit(1)
+                        Text(f.repo.isEmpty ? f.branch : "\(f.repo):\(f.branch)")
+                            .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button { toggleFolderPin(f) } label: {
+                        Image(systemName: f.pinned ? "pin.fill" : "pin").font(.system(size: 12))
+                            .foregroundStyle(f.pinned ? statusColor("done") : Color.secondary)
+                            .frame(width: 22, height: 22).contentShape(Rectangle())
+                    }.buttonStyle(.plain).cursor(.pointingHand).help(f.pinned ? "Unpin folder" : "Pin folder")
+                    Button { collapse() } label: {
+                        Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24).contentShape(Rectangle())
+                    }.buttonStyle(.plain).cursor(.pointingHand).help("Close")
+                }
+                .padding(.horizontal, 12).padding(.vertical, 9)
+                .gesture(windowDrag)
+                .contextMenu { Button("Copy path") { Actions.copyText(f.id) } }
+
+                Divider().overlay(.white.opacity(0.1))
+
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // Notes row (top) → notes page
+                        Button { push(.notes(cwd)) } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "note.text").font(.system(size: 11))
+                                Text(f.ideasCount > 0 ? "Notes · \(f.ideasCount)" : "Notes")
+                                    .font(.system(size: 11, design: .monospaced))
+                                Spacer()
+                                Image(systemName: "chevron.right").font(.system(size: 9))
+                            }
+                            .foregroundStyle(f.ideasCount > 0 ? statusColor("waiting") : Color.secondary)
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                            .contentShape(Rectangle())
+                        }.buttonStyle(.plain).cursor(.pointingHand)
+                        Divider().overlay(.white.opacity(0.08))
+                        ForEach(f.sessions) { s in
+                            SessionTileView(session: s, indent: 12,
+                                            onOpen: { Actions.open(s) },
+                                            onPin: { toggleSessionPin(s) },
+                                            onChat: { push(.chat(id: s.id, cwd: s.cwd, folder: f.name)) })
+                        }
+                    }
+                    .padding(.bottom, 10)
+                    .background(GeometryReader { g in Color.clear.preference(key: HeightKey.self, value: g.size.height) })
+                }
+                .frame(height: min(max(contentHeight, 1), maxBodyHeight))
+                .onPreferenceChange(HeightKey.self) { h in
+                    if abs(h - contentHeight) > 0.5 { contentHeight = h }
+                }
             }
-            }
+        } else {
+            Color.clear.frame(width: 320, height: 60).onAppear { popToRoot() }   // folder vanished
         }
-    }
-
-    private func rows(_ list: [Worktree]) -> some View {
-        ForEach(list) { wt in
-            RowView(wt: wt, store: store, focus: $focused, onMove: move, onPinned: revealAndFocusPin).id("row:\(wt.id)")
-        }
-    }
-
-    // ── Keyboard focus order + arrow navigation ───────────────────────────────
-    /// Visual order of arrow-navigable controls (rows + section headers).
-    private var focusOrder: [String] {
-        let pinned = store.worktrees.filter { $0.tier == "pinned" }
-        let active = store.worktrees.filter { $0.tier == "active" }
-        let other  = store.worktrees.filter { $0.tier == "other" }
-        var keys = pinned.map { "row:\($0.id)" }
-        if !active.isEmpty { keys.append("sec:ACTIVE"); if activeOpen { keys += active.map { "row:\($0.id)" } } }
-        if !other.isEmpty  { keys.append("sec:MORE");   if moreOpen   { keys += other.map  { "row:\($0.id)" } } }
-        return keys
-    }
-
-    private func move(_ from: String, _ dir: MoveCommandDirection) {
-        let order = focusOrder
-        guard let i = order.firstIndex(of: from) else { return }
-        switch dir {
-        case .down: if i + 1 < order.count { focused = order[i + 1] }
-        case .up:   if i > 0 { focused = order[i - 1] }
-        default: break
-        }
-    }
-
-    /// After (un)pinning, open the section the item landed in (so its button exists),
-    /// then re-focus that same item's pin button on the next tick.
-    private func revealAndFocusPin(_ cwd: String) {
-        switch store.worktrees.first(where: { $0.id == cwd })?.tier {
-        case "active": activeOpen = true
-        case "other":  moreOpen = true
-        default: break   // "pinned" is always visible
-        }
-        DispatchQueue.main.async { focused = "pin:\(cwd)" }
     }
 
     private func sectionLabel(_ text: String) -> some View {
@@ -400,10 +400,8 @@ struct PillView: View {
         .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 6)
     }
 
-    /// A full-width, keyboard-activatable accordion header with a disclosure chevron.
     private func accordionHeader(_ title: String, count: Int, isOpen: Bool, _ toggle: @escaping () -> Void) -> some View {
-        let key = "sec:\(title)"
-        return Button(action: toggle) {
+        Button(action: toggle) {
             HStack(spacing: 8) {
                 Image(systemName: isOpen ? "chevron.down" : "chevron.right").font(.system(size: 9))
                 Text("\(title) · \(count)").font(.system(size: 10, weight: .semibold, design: .monospaced)).kerning(1)
@@ -412,168 +410,209 @@ struct PillView: View {
             .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 6).foregroundStyle(.secondary)
             .contentShape(Rectangle())
         }.buttonStyle(.plain).cursor(.pointingHand)
-            .focused($focused, equals: key)
-            .id(key)
-            .onMoveCommand { move(key, $0) }
+    }
+
+    // ── Mutations ─────────────────────────────────────────────────────────────
+    private func toggleFolderPin(_ f: Folder) {
+        var order = store.folders.filter { $0.tier == "pinned" }.sorted { $0.pinIndex < $1.pinIndex }.map { $0.id }
+        if f.pinned { order.removeAll { $0 == f.id } } else { order.append(f.id) }
+        Actions.setPins(order); store.reload()
+    }
+
+    private func toggleSessionPin(_ s: Session) {
+        var order = store.folders.flatMap { $0.sessions }.filter { $0.pinned }.map { $0.id }
+        if s.pinned { order.removeAll { $0 == s.id } } else { order.append(s.id) }
+        Actions.setSessionPins(order); store.reload()
     }
 }
 
-/// A worktree row: click to open, plus pin + notes. Draggable; pinned rows accept drops (reorder).
-struct RowView: View {
-    let wt: Worktree
+// ── Folder row (root list): tap to open its page; pinned folders show tiles ────
+struct FolderView: View {
+    let folder: Folder
     @ObservedObject var store: WorktreeStore
-    var focus: FocusState<String?>.Binding
-    var onMove: (String, MoveCommandDirection) -> Void = { _, _ in }
-    var onPinned: (String) -> Void = { _ in }
-    var onDropRow: ((String) -> Void)? = nil
-    @State private var ideasOpen = false
-    @State private var draft = ""
+    var onOpenFolder: () -> Void
+    var onPinFolder: () -> Void
+    var onPinSession: (Session) -> Void
+    var onOpenChat: (Session) -> Void
     @State private var hover = false
-    @State private var notesHover = false
-    @State private var copiedId: String?
-    @FocusState private var noteFocused: Bool
-
-    private var notes: [Idea] { store.ideas.filter { $0.cwd == wt.id } }
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Name + status, with a pin icon button at the top-right ──
-            HStack(spacing: 10) {
-                Button { Actions.open(wt) } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(wt.folder).font(.system(size: 13, weight: .semibold, design: .monospaced)).foregroundStyle(.white).lineLimit(1)
-                            if wt.pooled { chip("eph") }
-                            if let h = wt.host { chip(h) }
-                        }
-                        Text(sub).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }.buttonStyle(.plain).cursor(.pointingHand)
-                    .focused(focus, equals: "row:\(wt.id)")     // scroll + arrow target
-                    .onMoveCommand { onMove("row:\(wt.id)", $0) }
-
-                Text(wt.shortCode).font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(statusColor(wt.state)).frame(width: 46, alignment: .trailing)
-
-                Button { togglePin() } label: {
-                    Image(systemName: wt.pinned ? "pin.fill" : "pin")
-                        .font(.system(size: 12))
-                        .foregroundStyle(wt.pinned ? statusColor("done") : Color.secondary)
-                        .frame(width: 24, height: 24)
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain).cursor(.pointingHand)
-                    .help(wt.pinned ? "Unpin" : "Pin")
-                    .focused(focus, equals: "pin:\(wt.id)")
-                    .id("pin:\(wt.id)")
-            }
-            .padding(.horizontal, 14).padding(.top, 9).padding(.bottom, 4)
-
-            // ── Notes accordion (full-width header) ──
-            Button { ideasOpen.toggle() } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: ideasOpen ? "chevron.down" : "chevron.right").font(.system(size: 9))
-                    Text(wt.ideasCount > 0 ? "Notes · \(wt.ideasCount)" : "Notes")
-                        .font(.system(size: 10.5, design: .monospaced))
-                    Spacer()
+            header
+            if folder.pinned {
+                ForEach(folder.collapsedSessions) { s in
+                    SessionTileView(session: s, indent: 26,
+                                    onOpen: { Actions.open(s) },
+                                    onPin: { onPinSession(s) },
+                                    onChat: { onOpenChat(s) })
                 }
-                .foregroundStyle(wt.ideasCount > 0 ? statusColor("waiting") : Color.secondary)
-                .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(notesHover ? Color.white.opacity(0.06) : .clear)
+            }
+        }
+        .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.06)).frame(height: 1) }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Button(action: onOpenFolder) {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.secondary).frame(width: 10)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(folder.name).font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white).lineLimit(1)
+                        Text(folder.repo.isEmpty ? folder.branch : "\(folder.repo):\(folder.branch)")
+                            .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    summary
+                    Text("\(folder.sessions.count)").font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary.opacity(0.7))
+                }
                 .contentShape(Rectangle())
             }.buttonStyle(.plain).cursor(.pointingHand)
-                .onHover { notesHover = $0 }
-                .focused(focus, equals: "notes:\(wt.id)")
-                .id("notes:\(wt.id)")
 
-            if ideasOpen { ideasPanel }
+            Button(action: onPinFolder) {
+                Image(systemName: folder.pinned ? "pin.fill" : "pin")
+                    .font(.system(size: 12)).foregroundStyle(folder.pinned ? statusColor("done") : Color.secondary)
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }.buttonStyle(.plain).cursor(.pointingHand).help(folder.pinned ? "Unpin folder" : "Pin folder")
         }
-        .background(hover ? Color.white.opacity(0.05) : Color.clear)
-        .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.05)).frame(height: 1) }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(hover ? Color.white.opacity(0.04) : .clear)
         .onHover { hover = $0 }
-        .onChange(of: ideasOpen) { open in
-            if open { DispatchQueue.main.async { noteFocused = true } }   // auto-focus the input
+        .contextMenu { Button("Copy path") { Actions.copyText(folder.id) } }
+    }
+
+    @ViewBuilder private var summary: some View {
+        if folder.runningCount > 0 {
+            Text("\(folder.runningCount) run").font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(statusColor("working"))
+        } else {
+            Text(shortCode(folder.aggregate)).font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(statusColor(folder.aggregate))
         }
-        .onDrag {
-            NSCursor.closedHand.set()   // grabbing, at drag start
-            return NSItemProvider(object: wt.id as NSString)
-        }
-        .applyIf(onDropRow != nil) { view in
-            view.onDrop(of: [.text], isTargeted: nil) { providers in
-                _ = providers.first?.loadObject(ofClass: NSString.self) { obj, _ in
-                    if let c = obj as? String { DispatchQueue.main.async { onDropRow?(c) } }
+    }
+}
+
+// ── Session tile ──────────────────────────────────────────────────────────────
+struct SessionTileView: View {
+    let session: Session
+    var indent: CGFloat = 26
+    var onOpen: () -> Void
+    var onPin: () -> Void
+    var onChat: () -> Void
+    @State private var hover = false
+
+    // Pinned tiles hide the time (they're persistent, not activity-driven); keep host.
+    private var subtitle: String {
+        if session.pinned { return session.host ?? "" }
+        return "\(timeLabel(session.lastActivity))\(session.host.map { " · \($0)" } ?? "")"
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.label).font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.92)).lineLimit(1)
+                if !subtitle.isEmpty {
+                    Text(subtitle).font(.system(size: 9.5, design: .monospaced)).foregroundStyle(.secondary)
                 }
-                return true
             }
+            Spacer()
+            Button(action: onOpen) {
+                Image(systemName: hostIcon(session.host)).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }.buttonStyle(.plain).cursor(.pointingHand).help("Open in \(session.host ?? "editor")")
+            Button(action: onPin) {
+                Image(systemName: session.pinned ? "pin.fill" : "pin").font(.system(size: 11))
+                    .foregroundStyle(session.pinned ? statusColor("done") : Color.secondary)
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }.buttonStyle(.plain).cursor(.pointingHand).help(session.pinned ? "Unpin session" : "Pin session")
+            Button(action: onChat) {
+                Image(systemName: "bubble.left").font(.system(size: 11)).foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }.buttonStyle(.plain).cursor(.pointingHand).help("Chat")
+            Text(session.shortCode).font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(statusColor(session.state)).frame(width: 44, alignment: .trailing)
+        }
+        .padding(.leading, indent).padding(.trailing, 12).padding(.vertical, 7)
+        .background(hover ? Color.white.opacity(0.05) : .clear)
+        .onHover { hover = $0 }
+        .contextMenu {
+            Button("Copy path") { Actions.copyText(session.cwd) }
+            Button("Copy session id") { Actions.copyText(session.id) }
         }
     }
+}
 
-    private var sub: String {
-        let base = wt.repo.isEmpty ? wt.branch : "\(wt.repo):\(wt.branch)"
-        if let t = wt.title, !t.isEmpty { return "\(base) · \(t)" }
-        return base
-    }
+// ── Notes page (per folder) ────────────────────────────────────────────────────
+struct NotesPage: View {
+    let folderName: String
+    let cwd: String
+    @ObservedObject var store: WorktreeStore
+    var onBack: () -> Void = {}
+    var onClose: () -> Void = {}
 
-    private var ideasPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(notes) { idea in
-                HStack(spacing: 6) {
-                    Text(idea.text).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture { copyNote(idea) }   // click to copy
-                        .cursor(.pointingHand)
-                        .help("Click to copy")
-                    if copiedId == idea.id {
-                        Text("copied").font(.system(size: 9.5, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(statusColor("done"))
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+    private let bodyHeight: CGFloat = 380
+
+    private var notes: [Idea] { store.ideas.filter { $0.cwd == cwd } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left").font(.system(size: 12, weight: .bold)).foregroundStyle(.secondary)
+                        .frame(width: 24, height: 24).contentShape(Rectangle())
+                }.buttonStyle(.plain).cursor(.pointingHand).help("Back")
+                Text("\(folderName) · Notes").font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(.white).lineLimit(1)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.secondary)
+                        .frame(width: 24, height: 24).contentShape(Rectangle())
+                }.buttonStyle(.plain).cursor(.pointingHand).help("Close")
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            Divider().overlay(.white.opacity(0.1))
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    if notes.isEmpty {
+                        Text("No notes yet.").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 18)
                     }
-                    Button { Actions.removeIdea(id: idea.id); store.reload() } label: {
-                        Image(systemName: "xmark").font(.system(size: 9)).foregroundStyle(.secondary)
-                    }.buttonStyle(.plain).cursor(.pointingHand)
+                    ForEach(notes) { idea in
+                        HStack(spacing: 6) {
+                            Text(idea.text).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
+                                .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                            Button { Actions.removeIdea(id: idea.id); store.reload() } label: {
+                                Image(systemName: "xmark").font(.system(size: 9)).foregroundStyle(.secondary)
+                            }.buttonStyle(.plain).cursor(.pointingHand)
+                        }
+                        .padding(.horizontal, 9).padding(.vertical, 7)
+                        .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+                    }
                 }
-                .padding(.horizontal, 9).padding(.vertical, 7)
-                .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, 12).padding(.vertical, 10)
             }
+            .frame(height: bodyHeight)
+
+            Divider().overlay(.white.opacity(0.1))
             TextField("park a note… ↵", text: $draft)
-                .textFieldStyle(.plain)
-                .font(.system(size: 11.5, design: .monospaced))
+                .textFieldStyle(.plain).font(.system(size: 11.5, design: .monospaced))
                 .padding(.horizontal, 9).padding(.vertical, 7)
                 .background(Color.black.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(statusColor("working").opacity(0.4)))
-                .focused($noteFocused)
-                .onSubmit { addNote() }
+                .focused($focused)
+                .onSubmit(add)
+                .padding(.horizontal, 12).padding(.vertical, 9)
         }
-        .padding(.horizontal, 14).padding(.bottom, 10).padding(.leading, 16)
+        .frame(width: 360)
+        .onAppear { focused = true }
     }
 
-    private func chip(_ t: String) -> some View {
-        Text(t).font(.system(size: 8.5, design: .monospaced)).foregroundStyle(.secondary)
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
-    }
-
-    private func togglePin() {
-        var order = store.worktrees.filter { $0.tier == "pinned" }.sorted { $0.pinIndex < $1.pinIndex }.map { $0.id }
-        if wt.pinned { order.removeAll { $0 == wt.id } } else { order.append(wt.id) }
-        Actions.setPins(order); store.reload()
-        // The row jumps to another section (new view identity), which drops focus.
-        // Let the parent reveal the destination section, then re-focus the same item.
-        onPinned(wt.id)
-    }
-
-    private func addNote() {
+    private func add() {
         let t = draft.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
-        Actions.addIdea(text: t, cwd: wt.id); draft = ""; store.reload()
-    }
-
-    private func copyNote(_ idea: Idea) {
-        Actions.copyText(idea.text)
-        copiedId = idea.id
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            if copiedId == idea.id { copiedId = nil }
-        }
+        Actions.addIdea(text: t, cwd: cwd); draft = ""; store.reload()
     }
 }

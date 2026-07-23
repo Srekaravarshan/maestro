@@ -93,6 +93,19 @@ cs() { python3 '"'"'"$SESSIONS_SCRIPT"'"'"' "$@"; }
   fi
 fi
 
+# ── 4b. Deploy Claude Code state hook ────────────────────────────────────────
+# Claude Code's settings reference ~/.worktree-dash/hooks/set-state.sh. Keep that
+# installed copy in sync with the repo so fixes (e.g. the idle-reminder guard)
+# actually take effect.
+HOOK_SRC="$SCRIPT_DIR/hooks/set-state.sh"
+HOOK_DST=~/.worktree-dash/hooks/set-state.sh
+if [ -f "$HOOK_SRC" ]; then
+  mkdir -p ~/.worktree-dash/hooks
+  cp "$HOOK_SRC" "$HOOK_DST"
+  chmod +x "$HOOK_DST"
+  echo "  Installed/updated: $HOOK_DST"
+fi
+
 # ── 5. Verify tmux is available ──────────────────────────────────────────────
 if ! command -v tmux &>/dev/null; then
   echo ""
