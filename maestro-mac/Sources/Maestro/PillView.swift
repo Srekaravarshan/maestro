@@ -246,7 +246,6 @@ struct PillView: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
         .fixedSize()
-        .overlay(alignment: .leading) { Rectangle().fill(statusColor(a.state)).frame(width: 4) }
         .onTapGesture { expand() }
         .gesture(windowDrag)
         .cursor(.openHand)
