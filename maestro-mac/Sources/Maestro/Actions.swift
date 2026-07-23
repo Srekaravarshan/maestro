@@ -14,6 +14,11 @@ enum Actions {
         }
     }
 
+    static func copyText(_ s: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(s, forType: .string)
+    }
+
     static func copyResume(_ wt: Worktree) {
         let cmd = wt.sessionId.map { "cd \"\(wt.id)\" && claude --resume \($0)" } ?? "cd \"\(wt.id)\" && claude"
         NSPasteboard.general.clearContents()

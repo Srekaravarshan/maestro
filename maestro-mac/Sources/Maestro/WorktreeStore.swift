@@ -194,9 +194,11 @@ final class WorktreeStore: ObservableObject {
         return (cwd, branch, title)
     }
 
+    /// Summary counts for the collapsed pill — pinned worktrees only, so the pill
+    /// reflects the sessions the user actually cares about (not every active one).
     var counts: (work: Int, block: Int, err: Int, done: Int) {
         var w = 0, b = 0, e = 0, d = 0
-        for wt in worktrees {
+        for wt in worktrees where wt.tier == "pinned" {
             switch wt.state {
             case "working": w += 1
             case "waiting", "blocked": b += 1

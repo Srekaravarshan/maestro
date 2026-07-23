@@ -69,10 +69,8 @@ private struct WindowAccessor: NSViewRepresentable {
 struct PillView: View {
     @ObservedObject var store: WorktreeStore
     @ObservedObject var hud: HUDState
-    var onPillSize: (CGSize) -> Void = { _ in }
-    var onTransition: () -> Void = {}
-
     @State private var window: NSWindow?
+    @State private var didInitialCenter = false
     @State private var dragStartMouse: CGPoint?
     @State private var dragStartOrigin: CGPoint?
     // Accordion open/closed — persisted across launches (UserDefaults).
@@ -116,7 +114,7 @@ struct PillView: View {
             .padding(shadowMargin)
             .background(GeometryReader { g in Color.clear.preference(key: SizeKey.self, value: g.size) })
             .opacity(pillOpacity)
-            .onPreferenceChange(SizeKey.self) { onPillSize($0) }
+            .onPreferenceChange(SizeKey.self) { fitWindow($0) }
             .onChange(of: hud.mode) { newMode in
                 guard newMode != displayedMode else { return }
                 // Fade out, swap + resize while invisible (no size tween → no width glitch), fade in.
@@ -160,6 +158,29 @@ struct PillView: View {
 
     private func expand()   { hud.mode = .expanded }   // PillView fades on mode change
     private func collapse() { hud.mode = .collapsed }
+
+    /// Size this pill's own window to the measured pill (keeps top-center on its own
+    /// screen). Runs over transparent area so the resize is invisible.
+    private func fitWindow(_ size: CGSize) {
+        guard let w = window, size.width > 1, size.height > 1 else { return }
+        if !didInitialCenter, let vf = (w.screen ?? NSScreen.main)?.visibleFrame {
+            w.setFrame(NSRect(x: vf.midX - size.width / 2, y: vf.maxY - size.height - 6,
+                              width: size.width, height: size.height), display: true)
+            didInitialCenter = true
+            return
+        }
+        let old = w.frame
+        let target = NSRect(x: old.midX - size.width / 2, y: old.maxY - size.height,
+                            width: size.width, height: size.height)
+        if !target.equalTo(old) { w.setFrame(target, display: true) }
+    }
+
+    /// Snap the pill back to top-center of its own screen (right-click → Reset position).
+    private func recenter() {
+        guard let w = window, let vf = (w.screen ?? NSScreen.main)?.visibleFrame else { return }
+        let s = w.frame.size
+        w.setFrameOrigin(NSPoint(x: vf.midX - s.width / 2, y: vf.maxY - s.height - 6))
+    }
 
     // ── Drag between sections: PINNED pins, ACTIVE/MORE unpins ────────────────
     enum DropZone { case pinned, other }
@@ -213,9 +234,10 @@ struct PillView: View {
         .padding(.horizontal, 14).padding(.vertical, 8)
         .fixedSize()
         .contentShape(Rectangle())
-        .onTapGesture { expand() }
+        .onTapGesture { expand() }               // single click — instant, no double-tap delay
         .gesture(windowDrag)
         .cursor(.openHand)
+        .contextMenu { Button("Reset position", action: recenter) }   // right-click to reset
     }
 
     private func seg(_ text: String, _ color: Color) -> some View {
@@ -224,26 +246,31 @@ struct PillView: View {
 
     // ── Attention ─────────────────────────────────────────────────────────────
     private func attentionView(_ a: AttentionInfo) -> some View {
-        HStack(spacing: 8) {
-            Text("[\(a.time)]").font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
-            Text(a.folder).font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(.white).lineLimit(1)
+        HStack(spacing: 11) {
+            Text("[\(a.time)]").font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary)
+            Text(a.folder).font(.system(size: 14, weight: .bold, design: .monospaced)).foregroundStyle(.white).lineLimit(1)
             Text("\(shortCode(a.state)) · \(shortPhrase(a.state))")
-                .font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(statusColor(a.state))
+                .font(.system(size: 13.5, weight: .bold, design: .monospaced)).foregroundStyle(statusColor(a.state))
             Button {
                 Actions.openPath(a.id, a.host); hud.attention = nil
             } label: {
-                Text("Open").font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .padding(.horizontal, 10).padding(.vertical, 3)
+                Text("Open").font(.system(size: 12.5, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 12).padding(.vertical, 5)
                     .foregroundStyle(statusColor(a.state))
                     .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(statusColor(a.state).opacity(0.5)))
             }.buttonStyle(.plain).cursor(.pointingHand)
+            Button { hud.attention = nil } label: {   // dismiss the banner
+                Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24).contentShape(Rectangle())
+            }.buttonStyle(.plain).cursor(.pointingHand).help("Dismiss")
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .padding(.horizontal, 14).padding(.vertical, 11)
         .fixedSize()
-        .overlay(alignment: .leading) { Rectangle().fill(statusColor(a.state)).frame(width: 3) }
-        .onTapGesture { expand() }
+        .overlay(alignment: .leading) { Rectangle().fill(statusColor(a.state)).frame(width: 4) }
+        .onTapGesture { expand() }               // single click — instant
         .gesture(windowDrag)
         .cursor(.openHand)
+        .contextMenu { Button("Reset position", action: recenter) }
     }
 
     // ── Expanded ──────────────────────────────────────────────────────────────
@@ -402,6 +429,8 @@ struct RowView: View {
     @State private var ideasOpen = false
     @State private var draft = ""
     @State private var hover = false
+    @State private var notesHover = false
+    @State private var copiedId: String?
     @FocusState private var noteFocused: Bool
 
     private var notes: [Idea] { store.ideas.filter { $0.cwd == wt.id } }
@@ -451,8 +480,10 @@ struct RowView: View {
                 }
                 .foregroundStyle(wt.ideasCount > 0 ? statusColor("waiting") : Color.secondary)
                 .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(notesHover ? Color.white.opacity(0.06) : .clear)
                 .contentShape(Rectangle())
             }.buttonStyle(.plain).cursor(.pointingHand)
+                .onHover { notesHover = $0 }
                 .focused(focus, equals: "notes:\(wt.id)")
                 .id("notes:\(wt.id)")
 
@@ -464,7 +495,6 @@ struct RowView: View {
         .onChange(of: ideasOpen) { open in
             if open { DispatchQueue.main.async { noteFocused = true } }   // auto-focus the input
         }
-        .cursor(.openHand)   // grab affordance — row is draggable
         .onDrag {
             NSCursor.closedHand.set()   // grabbing, at drag start
             return NSItemProvider(object: wt.id as NSString)
@@ -491,6 +521,14 @@ struct RowView: View {
                 HStack(spacing: 6) {
                     Text(idea.text).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture { copyNote(idea) }   // click to copy
+                        .cursor(.pointingHand)
+                        .help("Click to copy")
+                    if copiedId == idea.id {
+                        Text("copied").font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(statusColor("done"))
+                    }
                     Button { Actions.removeIdea(id: idea.id); store.reload() } label: {
                         Image(systemName: "xmark").font(.system(size: 9)).foregroundStyle(.secondary)
                     }.buttonStyle(.plain).cursor(.pointingHand)
@@ -529,5 +567,13 @@ struct RowView: View {
         let t = draft.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
         Actions.addIdea(text: t, cwd: wt.id); draft = ""; store.reload()
+    }
+
+    private func copyNote(_ idea: Idea) {
+        Actions.copyText(idea.text)
+        copiedId = idea.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            if copiedId == idea.id { copiedId = nil }
+        }
     }
 }
