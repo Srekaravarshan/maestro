@@ -16,6 +16,8 @@ export interface ClaudeStateResult {
   state: ClaudeState;
   /** Unix ms timestamp of when the state was written. Null if unknown/missing. */
   updated_at: number | null;
+  /** Host app the session runs in: vscode | iterm | terminal | tmux | app. */
+  host?: string;
 }
 
 interface StatusFile {
@@ -24,6 +26,7 @@ interface StatusFile {
   branch?: string;
   state: ClaudeState;
   ts: number; // unix seconds
+  host?: string;
 }
 
 function readStatusFiles(): StatusFile[] {
@@ -53,10 +56,10 @@ export function getClaudeStateResult(worktreePath: string): ClaudeStateResult {
 
   const ageSecs = nowSecs - match.ts;
   if (match.state === 'working' && ageSecs > STALE_SECONDS) {
-    return { state: 'unknown', updated_at: null };
+    return { state: 'unknown', updated_at: null, host: match.host };
   }
 
-  return { state: match.state, updated_at: match.ts * 1000 };
+  return { state: match.state, updated_at: match.ts * 1000, host: match.host };
 }
 
 /** Convenience — state only, no timestamp */

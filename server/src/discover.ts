@@ -58,6 +58,26 @@ export interface WorktreeInfo {
    * after merging with the agent store. Never set by discovery itself.
    */
   agent?: AgentData;
+
+  // ── Dynamic-discovery fields (populated by claude-sessions.ts) ──────────
+  /** Newest Claude Code session id for this cwd — used for `claude --resume`. */
+  sessionId?: string;
+  /** AI-generated session title, if present in the transcript. */
+  title?: string;
+  /** Unix ms of the newest session activity (transcript mtime). */
+  lastActivity?: number | null;
+  /** True if the user pinned this worktree (computed in the HTTP server). */
+  pinned?: boolean;
+  /** True if this is a desktop-managed pooled worktree (.claude/worktrees/…). */
+  pooled?: boolean;
+  /** Which bucket the UI should file this under (computed in the HTTP server). */
+  tier?: 'pinned' | 'active' | 'other';
+  /** Name of the main repo this worktree belongs to (basename of repo root). */
+  repoName?: string;
+  /** Position within the user's pin order (lower = higher priority). */
+  pinIndex?: number;
+  /** Host app the session runs in: vscode | iterm | terminal | tmux | app. */
+  host?: string;
 }
 
 export interface RepoGroup {

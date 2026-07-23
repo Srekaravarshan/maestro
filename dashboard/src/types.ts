@@ -30,6 +30,26 @@ export interface WorktreeInfo {
   /** Unix ms when hook last wrote state. Null = no hooks fired yet. */
   claude_updated_at: number | null;
   agent?: AgentData;
+
+  // ── Dynamic-discovery fields ─────────────────────────────────────────────
+  /** Newest Claude Code session id — used for `claude --resume`. */
+  sessionId?: string;
+  /** AI-generated session title, if present. */
+  title?: string;
+  /** Unix ms of newest session activity (transcript mtime). */
+  lastActivity?: number | null;
+  /** True if the user pinned this worktree. */
+  pinned?: boolean;
+  /** True if this is a desktop-managed pooled worktree. */
+  pooled?: boolean;
+  /** UI bucket. */
+  tier?: 'pinned' | 'active' | 'other';
+  /** Name of the main repo this worktree belongs to. */
+  repoName?: string;
+  /** Position within the user's pin order (lower = higher priority). */
+  pinIndex?: number;
+  /** Host app the session runs in: vscode | iterm | terminal | tmux | app. */
+  host?: string;
 }
 
 export interface RepoGroup {

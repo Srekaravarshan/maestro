@@ -188,6 +188,7 @@ impl PtyManager {
         // Dropping the session closes the master PTY, which signals the reader thread to exit
     }
 
+    #[allow(dead_code)]
     pub fn kill_all(&self) {
         self.sessions.lock().unwrap().clear();
     }

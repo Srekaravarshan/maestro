@@ -75,7 +75,25 @@ else
   echo "  Shell helpers already in ~/.zshrc — skipped"
 fi
 
-# ── 4. Verify tmux is available ──────────────────────────────────────────────
+# ── 4. Install maestro-sessions command ─────────────────────────────────────
+SESSIONS_SCRIPT="$SCRIPT_DIR/hooks/maestro-sessions.py"
+if [ -f "$SESSIONS_SCRIPT" ]; then
+  chmod +x "$SESSIONS_SCRIPT"
+  SESSIONS_ALIAS='
+# Maestro session search
+maestro-sessions() { python3 '"'"'"$SESSIONS_SCRIPT"'"'"' "$@"; }
+# Shorthand: "cs search ngrok" or "cs list"
+cs() { python3 '"'"'"$SESSIONS_SCRIPT"'"'"' "$@"; }
+'
+  if ! grep -q "maestro-sessions" "$ZSHRC" 2>/dev/null; then
+    echo "$SESSIONS_ALIAS" >> "$ZSHRC"
+    echo "  Added maestro-sessions / cs aliases to ~/.zshrc"
+  else
+    echo "  maestro-sessions alias already in ~/.zshrc — skipped"
+  fi
+fi
+
+# ── 5. Verify tmux is available ──────────────────────────────────────────────
 if ! command -v tmux &>/dev/null; then
   echo ""
   echo "  ⚠  tmux not found. Install it:"

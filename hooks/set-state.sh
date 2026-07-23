@@ -36,15 +36,41 @@ BR=$(git -C "$DIR" branch --show-current 2>/dev/null)
 
 REPO=$(basename "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || echo "$DIR")")
 
+# ── Detect the host app (best-effort, from the session's environment) ──────
+# VS Code integrated terminal exports TERM_PROGRAM=vscode + VSCODE_*; iTerm and
+# Terminal set TERM_PROGRAM; the Claude Code desktop app has none of these.
+if [ "$TERM_PROGRAM" = "vscode" ] || [ -n "$VSCODE_PID" ] || [ -n "$VSCODE_GIT_IPC_HANDLE" ]; then
+  HOST="vscode"
+elif [ -n "$TMUX" ]; then
+  HOST="tmux"
+elif [ "$TERM_PROGRAM" = "iTerm.app" ]; then
+  HOST="iterm"
+elif [ "$TERM_PROGRAM" = "Apple_Terminal" ]; then
+  HOST="terminal"
+else
+  HOST="app"
+fi
+
 # ── Write status file ──────────────────────────────────────────────────────
 # Key = first 12 chars of SHA-1 of the absolute path — stable across renames
 KEY=$(printf '%s' "$DIR" | shasum | cut -c1-12)
-
+STATUS_FILE=~/.worktree-dash/status/"$KEY".json
 mkdir -p ~/.worktree-dash/status
 
-printf '{"id":"%s","repo":"%s","branch":"%s","state":"%s","ts":%s}\n' \
-  "$DIR" "$REPO" "$BR" "$STATE" "$(date +%s)" \
-  > ~/.worktree-dash/status/"$KEY".json
+# Suppress the false "needs input": Claude Code's Notification hook fires both
+# for real permission prompts AND as a ~60s idle nudge after a turn ends. Treat
+# it as waiting only if the session is currently WORKING (a real mid-task
+# prompt). If it's already idle, this is just the idle reminder — leave it.
+if [ "$STATE" = "waiting" ] && [ -f "$STATUS_FILE" ]; then
+  CUR=$(grep -o '"state":"[a-z]*"' "$STATUS_FILE" | head -1 | sed 's/.*"state":"//;s/"//')
+  if [ "$CUR" = "idle" ]; then
+    exit 0
+  fi
+fi
+
+printf '{"id":"%s","repo":"%s","branch":"%s","state":"%s","ts":%s,"host":"%s"}\n' \
+  "$DIR" "$REPO" "$BR" "$STATE" "$(date +%s)" "$HOST" \
+  > "$STATUS_FILE"
 
 # ── Ping dashboard for immediate update (fire-and-forget) ─────────────────
 curl -s -X POST http://localhost:3444/api/refresh \
@@ -52,27 +78,17 @@ curl -s -X POST http://localhost:3444/api/refresh \
   -d '{}' >/dev/null 2>&1 &
 
 # ── macOS notification on idle OR waiting ─────────────────────────────────
+# Maestro (the menu bar app) fires its own richer alert + sound via the HUD
+# when it detects the state transition over SSE. This osascript call is a
+# SILENT fallback banner for when Maestro isn't running — no sound, so it
+# never double-beeps against the HUD's alert sound.
 if [ "$STATE" = "idle" ] || [ "$STATE" = "waiting" ]; then
   if [ "$STATE" = "idle" ]; then
-    NOTIF_TITLE="Done: $BR"
-    NOTIF_MSG="Claude finished — click to focus"
-    NOTIF_SOUND="Glass"
+    NOTIF_MSG="Claude finished in $REPO"
   else
-    NOTIF_TITLE="⚠ Needs input: $BR"
-    NOTIF_MSG="Claude has a question — click to focus"
-    NOTIF_SOUND="Ping"
+    NOTIF_MSG="Claude is waiting — $REPO"
   fi
-  if command -v terminal-notifier &>/dev/null; then
-    terminal-notifier \
-      -title "$NOTIF_TITLE" \
-      -subtitle "$REPO" \
-      -message "$NOTIF_MSG" \
-      -sound "$NOTIF_SOUND" \
-      -execute "open -a 'Visual Studio Code' '$DIR'" \
-      2>/dev/null &
-  else
-    # Fallback: macOS built-in osascript notification (no click-to-focus)
-    osascript -e "display notification \"$NOTIF_MSG — $BR ($REPO)\" with title \"Maestro\" sound name \"$NOTIF_SOUND\"" \
-      2>/dev/null &
-  fi
+  # Silent banner (no `sound name`) — the HUD owns the alert sound.
+  osascript -e "display notification \"$NOTIF_MSG\" with title \"Maestro\"" \
+    2>/dev/null &
 fi

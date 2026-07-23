@@ -16,6 +16,9 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Response } from 'express';
 import { loadRepos } from './registry.js';
 import { listWorktrees, type ListWorktreesResult } from './discover.js';
+import { discoverSessions } from './claude-sessions.js';
+import { getPins, getPinsList, addPin, removePin, reorderPins, setPins } from './pins.js';
+import { getClaudeStateResult } from './state.js';
 import { focusInVSCode, openInBrowser, switchToSpace } from './shells.js';
 import { setWorktreeColors, clearWorktreeColors } from './vscode.js';
 import { agentStore } from './agent-store.js';
@@ -90,9 +93,65 @@ function broadcast(event: string, data: unknown): void {
   }
 }
 
-// ── Poll loop ──────────────────────────────────────────────────────────────
+// ── Poll loop (two tiers) ────────────────────────────────────────────────────
+//
+//   • refreshDiscovery() — EXPENSIVE. Shells out to git for every worktree.
+//     Runs once at startup and on the POLL_MS interval only.
+//   • poll() — CHEAP. Overlays fresh Claude state (read from the tiny status
+//     JSON files) onto the cached git discovery, merges agent data, and
+//     broadcasts. This is what the /api/refresh hook and the agent endpoints
+//     call — so a hook fire never triggers an N-worktree git sweep.
 
 let lastSnapshot = '';
+
+/** Cached result of the last expensive git discovery. */
+let cachedRaw: ListWorktreesResult = { repos: [], generated_at: 0 };
+
+/** EXPENSIVE: dynamic discovery from ~/.claude/projects/. Updates the cache. */
+function refreshDiscovery(): void {
+  try {
+    cachedRaw = discoverSessions();
+  } catch (err) {
+    process.stderr.write(`[maestro] discovery error: ${String(err)}\n`);
+  }
+}
+
+const ACTIVE_WINDOW_MS = 15 * 60 * 1000; // "active" = touched in the last 15 min
+
+/** Tag each worktree with pinned + tier so the UI can bucket them. */
+function addTiers(result: ListWorktreesResult, pinsOrder: string[]): ListWorktreesResult {
+  const now = Date.now();
+  return {
+    ...result,
+    repos: result.repos.map(repo => ({
+      ...repo,
+      worktrees: repo.worktrees.map(wt => {
+        const pinIndex = pinsOrder.indexOf(wt.id);
+        const pinned = pinIndex >= 0;
+        const liveHook = wt.claude === 'working' || wt.claude === 'waiting';
+        const liveAgent = wt.agent != null && wt.agent.status !== 'done';
+        const recent = wt.lastActivity != null && (now - wt.lastActivity) < ACTIVE_WINDOW_MS;
+        const active = liveHook || liveAgent || recent;
+        const tier: 'pinned' | 'active' | 'other' = pinned ? 'pinned' : active ? 'active' : 'other';
+        return { ...wt, pinned, tier, pinIndex: pinned ? pinIndex : undefined };
+      }),
+    })),
+  };
+}
+
+/** Overlay fresh Claude state (from status files) onto cached git discovery. */
+function withFreshClaudeState(raw: ListWorktreesResult): ListWorktreesResult {
+  return {
+    ...raw,
+    repos: raw.repos.map(repo => ({
+      ...repo,
+      worktrees: repo.worktrees.map(wt => {
+        const cs = getClaudeStateResult(wt.id);
+        return { ...wt, claude: cs.state, claude_updated_at: cs.updated_at, host: cs.host };
+      }),
+    })),
+  };
+}
 
 /** Merge agent store data into the discovery result before broadcasting. */
 function mergeAgentData(result: ListWorktreesResult): ListWorktreesResult {
@@ -111,40 +170,46 @@ function mergeAgentData(result: ListWorktreesResult): ListWorktreesResult {
 /** Track previous claude states so we can detect hook-based transitions */
 const prevClaudeState = new Map<string, string>();
 
-function poll(): void {
-  try {
-    const repos  = loadRepos();
-    const raw    = repos.length > 0 ? listWorktrees(repos) : { repos: [], generated_at: 0 };
-    const result = mergeAgentData(raw);
-
-    // Detect hook state changes and add to activity log
-    for (const repo of result.repos) {
-      for (const wt of repo.worktrees) {
-        const prev = prevClaudeState.get(wt.id);
-        if (prev !== wt.claude && wt.claude !== 'unknown') {
-          prevClaudeState.set(wt.id, wt.claude);
-          if (prev !== undefined) { // skip the initial population
-            addActivity({
-              ts:          Date.now(),
-              worktree_id: wt.id,
-              branch:      wt.branch,
-              repo:        repo.repo,
-              event:       wt.claude,
-              message:     wt.claude === 'waiting' ? 'Claude needs input' : `Claude is ${wt.claude}`,
-            });
-          }
-        } else if (!prevClaudeState.has(wt.id)) {
-          prevClaudeState.set(wt.id, wt.claude);
+/** Mutates activityLog + prevClaudeState. Call only from poll(). */
+function detectActivityTransitions(result: ListWorktreesResult): void {
+  for (const repo of result.repos) {
+    for (const wt of repo.worktrees) {
+      const prev = prevClaudeState.get(wt.id);
+      if (prev !== wt.claude && wt.claude !== 'unknown') {
+        prevClaudeState.set(wt.id, wt.claude);
+        if (prev !== undefined) { // skip the initial population
+          addActivity({
+            ts:          Date.now(),
+            worktree_id: wt.id,
+            branch:      wt.branch,
+            repo:        repo.repo,
+            event:       wt.claude,
+            message:     wt.claude === 'waiting' ? 'Claude needs input' : `Claude is ${wt.claude}`,
+          });
         }
+      } else if (!prevClaudeState.has(wt.id)) {
+        prevClaudeState.set(wt.id, wt.claude);
       }
     }
+  }
+}
 
-    const payload = {
-      ...result,
-      activity:         activityLog.slice().reverse(),
-      openTerminals:    getOpenTerminalsForBroadcast(),
-      restoreTerminals: previousTerminals,
-    };
+/** Assemble the SSE broadcast payload (pure — no mutation). */
+function assemblePayload(result: ListWorktreesResult) {
+  return {
+    ...result,
+    activity:         activityLog.slice().reverse(),
+    openTerminals:    getOpenTerminalsForBroadcast(),
+    restoreTerminals: previousTerminals,
+  };
+}
+
+/** CHEAP: overlay fresh state onto cached discovery, diff, broadcast. */
+function poll(): void {
+  try {
+    const result = addTiers(mergeAgentData(withFreshClaudeState(cachedRaw)), getPinsList());
+    detectActivityTransitions(result);
+    const payload = assemblePayload(result);
     const snap = JSON.stringify(payload);
     if (snap !== lastSnapshot) {
       lastSnapshot = snap;
@@ -171,18 +236,9 @@ app.get('/events', (req, res) => {
 
   addClient(res);
 
-  // Send current state immediately on connect
-  const repos  = loadRepos();
-  const raw: ListWorktreesResult = repos.length > 0
-    ? listWorktrees(repos)
-    : { repos: [], generated_at: 0 };
-  const result  = mergeAgentData(raw);
-  const payload = {
-    ...result,
-    activity:         activityLog.slice().reverse(),
-    openTerminals:    getOpenTerminalsForBroadcast(),
-    restoreTerminals: previousTerminals,
-  };
+  // Send current state immediately on connect (from cache — no git sweep)
+  const result  = addTiers(mergeAgentData(withFreshClaudeState(cachedRaw)), getPinsList());
+  const payload = assemblePayload(result);
   res.write(`event: state\ndata: ${JSON.stringify(payload)}\n\n`);
 });
 
@@ -256,6 +312,41 @@ app.post('/api/agent/error', (req, res) => {
     poll();
   }
   return res.json({ ok });
+});
+
+// ── Pins ────────────────────────────────────────────────────────────────────
+
+app.post('/api/pin', (req, res) => {
+  const { cwd } = req.body as { cwd?: string };
+  if (!cwd) return res.status(400).json({ ok: false, error: 'cwd required' });
+  addPin(cwd);
+  poll(); // recompute tiers + broadcast immediately
+  return res.json({ ok: true, pins: [...getPins()] });
+});
+
+app.post('/api/unpin', (req, res) => {
+  const { cwd } = req.body as { cwd?: string };
+  if (!cwd) return res.status(400).json({ ok: false, error: 'cwd required' });
+  removePin(cwd);
+  poll();
+  return res.json({ ok: true, pins: [...getPins()] });
+});
+
+app.post('/api/pins/reorder', (req, res) => {
+  const { order } = req.body as { order?: string[] };
+  if (!Array.isArray(order)) return res.status(400).json({ ok: false, error: 'order[] required' });
+  const pins = reorderPins(order);
+  poll();
+  return res.json({ ok: true, pins });
+});
+
+// Set the full ordered pinned list — handles pin + unpin + reorder in one call.
+app.post('/api/pins/set', (req, res) => {
+  const { order } = req.body as { order?: string[] };
+  if (!Array.isArray(order)) return res.status(400).json({ ok: false, error: 'order[] required' });
+  const pins = setPins(order);
+  poll();
+  return res.json({ ok: true, pins });
 });
 
 // Action: write VS Code color identity for all worktrees
@@ -409,7 +500,10 @@ httpServer.listen(HTTP_PORT, () => {
     if (removed > 0) poll();
   }, 2 * 60 * 1000);
 
-  // Poll loop
+  // Initial discovery + broadcast
+  refreshDiscovery();
   poll();
-  setInterval(poll, POLL_MS);
+  // Expensive git discovery on the interval; cheap poll overlays fresh state.
+  // Hook fires and agent endpoints call poll() only — no git sweep per event.
+  setInterval(() => { refreshDiscovery(); poll(); }, POLL_MS);
 });
